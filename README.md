@@ -18,8 +18,9 @@ A modular Django backend that powers a platform connecting patients with healthc
 
 - Python 3.12+
 - pip
+- Docker + Docker Compose (for PostgreSQL)
 
-## Setup
+## Quick Start (with Docker PostgreSQL)
 
 ```bash
 # Create virtual environment
@@ -31,9 +32,16 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env if needed (defaults work for local SQLite development)
+# Edit .env POSTGRES_PASSWORD if desired (default works for local dev)
 
-# Run migrations
+# Start PostgreSQL in Docker
+docker compose up -d db
+
+# Verify PostgreSQL is running
+docker compose ps
+docker compose logs db
+
+# Run migrations on PostgreSQL
 python manage.py migrate
 
 # Create a superuser
@@ -45,6 +53,28 @@ python manage.py runserver
 # Verify health
 curl http://localhost:8000/api/health/
 ```
+
+## Docker Commands
+
+| Command | Action |
+|---------|--------|
+| `docker compose up -d db` | Start PostgreSQL in background |
+| `docker compose ps` | Check container status |
+| `docker compose logs db` | View PostgreSQL logs |
+| `docker compose stop` | Stop PostgreSQL (data preserved) |
+| `docker compose down` | Stop and remove container (data preserved) |
+| `docker compose down -v` | Stop and remove container + volume (data lost) |
+
+### Architecture
+
+- **Django** runs locally on your machine.
+- **PostgreSQL** runs inside a Docker container.
+- `POSTGRES_HOST=localhost` because Django connects to the local Docker host.
+- Database data persists in the named Docker volume `postgres_data`.
+
+### Development without Docker
+
+If Docker is unavailable, Django falls back to SQLite automatically — just leave `POSTGRES_DB` commented out or empty in `.env`.
 
 ## Project Structure
 

@@ -84,16 +84,19 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # Database
 
-_db_name = env("DB_NAME", default=None)
-if _db_name:
+_postgres_db = env("POSTGRES_DB", default=None)
+if _postgres_db:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": _db_name,
-            "USER": env("DB_USER", default=""),
-            "PASSWORD": env("DB_PASSWORD", default=""),
-            "HOST": env("DB_HOST", default="localhost"),
-            "PORT": env("DB_PORT", default="5432"),
+            "NAME": _postgres_db,
+            "USER": env("POSTGRES_USER", default=""),
+            "PASSWORD": env("POSTGRES_PASSWORD", default=""),
+            "HOST": env("POSTGRES_HOST", default="localhost"),
+            "PORT": env("POSTGRES_PORT", default="5432"),
+            "OPTIONS": {
+                "connect_timeout": 10,
+            },
         },
     }
 else:
