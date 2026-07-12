@@ -1,9 +1,16 @@
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, APIException
+from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.conf import settings
 from django.middleware.csrf import CsrfViewMiddleware
+
+
+class CSRFFailure(APIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = "CSRF verification failed."
+    default_code = "csrf_failed"
 
 
 def _check_csrf(request):
@@ -42,9 +49,7 @@ class CookieJWTAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Token is invalid or expired.")
 
         if cookie_token and not _check_csrf(request):
-            # Cookie present but CSRF missing — treat as unauthenticated
-            # rather than raising (which would mask 401 with 403).
-            return None
+            raise CSRFFailure()
 
         user = JWTAuthentication().get_user(validated_token)
         return (user, validated_token)

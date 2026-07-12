@@ -140,7 +140,7 @@ class CookieAuthTests(TestCase):
         CSRF_USE_SESSIONS=False,
     )
     def test_csrf_rejects_unsafe_without_token(self):
-        """PATCH without X-CSRFToken is rejected when CSRF enforced."""
+        """PATCH without X-CSRFToken returns 403 when CSRF enforced."""
         csrf_client = Client(enforce_csrf_checks=True)
         # Log in — cookies stored in client's jar
         _jpost(csrf_client, reverse("accounts:login"), {
@@ -148,13 +148,16 @@ class CookieAuthTests(TestCase):
         })
         # Get CSRF cookie (stored in jar)
         csrf_client.get(reverse("accounts:csrf"))
-        # PATCH without X-CSRFToken → CookieJWTAuthentication returns None → 401
+        # PATCH without X-CSRFToken → CSRFFailure → 403
         resp = csrf_client.patch(
             reverse("accounts:current-user"),
             data=json.dumps({"first_name": "Hacked"}),
             content_type="application/json",
         )
-        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.status_code, 403)
+        body = resp.json()
+        self.assertEqual(body["detail"], "CSRF verification failed.")
+        self.assertEqual(body["code"], "csrf_failed")
 
     @override_settings(
         CSRF_COOKIE_NAME="mcc_csrftoken",

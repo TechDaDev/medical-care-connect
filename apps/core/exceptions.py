@@ -6,6 +6,8 @@ from rest_framework import exceptions, status
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
+from apps.accounts.authentication import CSRFFailure
+
 
 def custom_exception_handler(exc, context):
     """DRF exception handler that normalizes error responses.
@@ -62,6 +64,8 @@ def _get_code(exc):
     """Map exception types to error codes."""
     if isinstance(exc, exceptions.ValidationError):
         return "validation_error"
+    if isinstance(exc, CSRFFailure):
+        return "csrf_failed"
     if isinstance(exc, exceptions.AuthenticationFailed):
         return "authentication_failed"
     if isinstance(exc, exceptions.NotAuthenticated):

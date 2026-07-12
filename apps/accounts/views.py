@@ -2,6 +2,8 @@ from django.conf import settings
 from django.db import connections
 from django.db.utils import OperationalError
 from django.middleware.csrf import get_token as get_csrf_token
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import exceptions, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -82,6 +84,7 @@ def current_user(request: Request) -> Response:
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RegisterRateThrottle])
+@csrf_exempt
 def register_patient(request: Request) -> Response:
     """Register a new patient account.
 
@@ -101,9 +104,12 @@ def register_patient(request: Request) -> Response:
 
 # ── Login ───────────────────────────────────────────────────────────────────
 
+@method_decorator(csrf_exempt, name="dispatch")
 class LoginView(TokenObtainPairView):
     """Log in with email and password.
 
+    CSRF-exempt because login establishes authentication (no existing cookie
+    to forge). CSRF cookie is set in the response for subsequent requests.
     Sets JWT HTTP-only cookies on success.
     Returns serialized user data (no raw tokens in JSON body).
     Rejects inactive accounts.
@@ -134,6 +140,7 @@ class LoginView(TokenObtainPairView):
 
 # ── Token Refresh (cookie-aware) ───────────────────────────────────────────
 
+@method_decorator(csrf_exempt, name="dispatch")
 class CookieTokenRefreshView(TokenRefreshView):
     """Refresh access token using refresh token from HTTP-only cookie.
 
