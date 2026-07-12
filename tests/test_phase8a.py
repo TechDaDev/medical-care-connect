@@ -2,7 +2,7 @@
 
 import json
 
-from django.test import TestCase, override_settings
+from django.test import TestCase, override_settings, Client
 from django.urls import reverse
 
 from apps.accounts.models import User, UserRole
@@ -131,6 +131,57 @@ class CookieAuthTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(logout_resp.status_code, 200)
+
+    # ── CSRF enforcement (enforce_csrf_checks=True) ────────────────────
+
+    @override_settings(
+        CSRF_COOKIE_NAME="mcc_csrftoken",
+        CSRF_COOKIE_HTTPONLY=False,
+        CSRF_USE_SESSIONS=False,
+    )
+    def test_csrf_rejects_unsafe_without_token(self):
+        """PATCH without X-CSRFToken is rejected when CSRF enforced."""
+        csrf_client = Client(enforce_csrf_checks=True)
+        # Log in — cookies stored in client's jar
+        _jpost(csrf_client, reverse("accounts:login"), {
+            "email": "cookie@example.com", "password": self.password,
+        })
+        # Get CSRF cookie (stored in jar)
+        csrf_client.get(reverse("accounts:csrf"))
+        # PATCH without X-CSRFToken → CookieJWTAuthentication returns None → 401
+        resp = csrf_client.patch(
+            reverse("accounts:current-user"),
+            data=json.dumps({"first_name": "Hacked"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    @override_settings(
+        CSRF_COOKIE_NAME="mcc_csrftoken",
+        CSRF_COOKIE_HTTPONLY=False,
+        CSRF_USE_SESSIONS=False,
+    )
+    def test_csrf_allows_unsafe_with_token(self):
+        """PATCH with X-CSRFToken succeeds when CSRF enforced."""
+        csrf_client = Client(enforce_csrf_checks=True)
+        # Log in and get CSRF in separate steps (cookies in jar)
+        _jpost(csrf_client, reverse("accounts:login"), {
+            "email": "cookie@example.com", "password": self.password,
+        })
+        csrf_resp = csrf_client.get(reverse("accounts:csrf"))
+        # Extract CSRF value from the response cookie for the header
+        csrf_cookie = csrf_resp.cookies.get("mcc_csrftoken")
+        self.assertIsNotNone(csrf_cookie)
+        # PATCH with X-CSRFToken header → should pass CSRF
+        resp = csrf_client.patch(
+            reverse("accounts:current-user"),
+            data=json.dumps({"first_name": "Updated"}),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_cookie.value,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Updated")
 
     # ── CSRF endpoint ──────────────────────────────────────────────────
 

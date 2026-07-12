@@ -25,7 +25,9 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
-COPY . .
+COPY --chown=django:django . .
+COPY --chown=django:django entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 RUN mkdir -p /app/staticfiles && chown django:django /app/staticfiles
 
@@ -36,10 +38,4 @@ USER django
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python manage.py check --deploy --settings=config.settings.production || exit 1
 
-CMD ["gunicorn", "config.wsgi:application", \
-     "--bind", "0.0.0.0:8000", \
-     "--workers", "4", \
-     "--timeout", "120", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "--worker-class", "sync"]
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,0 +1,16 @@
+.env
+.venv
+venv
+__pycache__
+*.pyc
+.git
+.gitignore
+*.md
+.agents
+.vscode
+.idea
+media
+staticfiles
+db.sqlite3
+Dockerfile
+.dockerignore
