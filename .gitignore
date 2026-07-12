@@ -1,0 +1,47 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Database
+db.sqlite3
+
+# Media and static
+media/
+staticfiles/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Agent tooling (not project files)
+.agents/
+.qodo/
+AGENTS.md
+.clinerules/
+.cursor/
+.github/
+.opencode/
+.windsurf/
+skills-lock.json
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
