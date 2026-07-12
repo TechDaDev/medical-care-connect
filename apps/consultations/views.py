@@ -141,6 +141,10 @@ def accept_consultation(request: Request, pk: str) -> Response:
     consultation.accepted_at = timezone.now()
     consultation.save(update_fields=["status", "accepted_at", "updated_at"])
 
+    # Notify patient
+    from apps.notifications.services import notify_consultation_accepted
+    notify_consultation_accepted(consultation)
+
     serializer = ConsultationSerializer(consultation)
     return Response(serializer.data)
 
@@ -180,6 +184,10 @@ def cancel_consultation(request: Request, pk: str) -> Response:
     consultation.save(update_fields=[
         "status", "cancellation_reason", "cancelled_at", "updated_at"
     ])
+
+    # Notify participants
+    from apps.notifications.services import notify_consultation_cancelled
+    notify_consultation_cancelled(consultation)
 
     output = ConsultationSerializer(consultation)
     return Response(output.data)

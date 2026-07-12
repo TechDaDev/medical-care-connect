@@ -98,6 +98,10 @@ def confirm_record(request: Request, record_id) -> Response:
                 + "\n[Patient requested revision.]"
             )
             record.save(update_fields=["status", "doctor_notes"])
+
+            # Notify doctor
+            from apps.notifications.services import notify_record_revision_requested
+            notify_record_revision_requested(record)
             return Response(
                 {"detail": "Record marked for revision.", "status": record.status},
                 status=status.HTTP_200_OK,
@@ -112,6 +116,10 @@ def confirm_record(request: Request, record_id) -> Response:
             record.intake_session.status = "confirmed"
             record.intake_session.confirmed_at = timezone.now()
             record.intake_session.save(update_fields=["status", "confirmed_at"])
+
+        # Notify doctor
+        from apps.notifications.services import notify_record_confirmed
+        notify_record_confirmed(record)
 
     return Response(
         {"detail": "Record confirmed.", "status": record.status},

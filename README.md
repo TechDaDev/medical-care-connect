@@ -99,10 +99,10 @@ mcc_backend/
 │   ├── doctors/         # Doctor profiles
 │   ├── specialties/     # Medical specialties
 │   ├── consultations/   # Consultation requests
-│   ├── messaging/       # Placeholder
+│   ├── messaging/       # Patient-doctor messages + internal notes
 │   ├── medical_records/ # Medical record drafts
 │   ├── ai_intake/       # AI-assisted intake (DeepSeek)
-│   ├── notifications/   # Placeholder
+│   ├── notifications/   # In-app notifications
 │   └── audit/           # Placeholder
 └── tests/               # Unit & integration tests
 ```
@@ -138,6 +138,15 @@ mcc_backend/
 | `GET` | `/api/medical-records/<id>/` | Yes | Retrieve medical record draft |
 | `PATCH` | `/api/medical-records/<id>/` | Yes (Doctor) | Update draft record |
 | `POST` | `/api/medical-records/<id>/confirm/` | Yes (Patient) | Confirm finalized record |
+| `GET`, `POST` | `/api/messaging/<consultation_id>/messages/` | Yes | List (auto-mark read) / send consultation messages |
+| `POST` | `/api/messaging/<consultation_id>/messages/read/` | Yes | Mark specific messages as read |
+| `GET` | `/api/messaging/<consultation_id>/messages/unread-count/` | Yes | Unread count for a consultation |
+| `GET` | `/api/messaging/unread-counts/` | Yes | Unread counts for all user consultations |
+| `GET`, `POST` | `/api/messaging/<consultation_id>/internal-notes/` | Yes (Doctor) | List / create doctor internal notes |
+| `GET`, `DELETE` | `/api/messaging/<consultation_id>/internal-notes/<id>/` | Yes (Doctor) | Get / delete an internal note |
+| `GET` | `/api/notifications/` | Yes | List notifications (`?unread=true`) |
+| `POST` | `/api/notifications/read/` | Yes | Mark all notifications as read |
+| `GET` | `/api/notifications/unread-count/` | Yes | Unread notification count |
 
 ## Phase 4 — AI-Assisted Medical Intake
 
@@ -194,6 +203,24 @@ AI_INTAKE_PROVIDER=deepseek # Provider selection
 - `django-environ` for configuration
 - `django-cors-headers` for CORS
 
-## Next Phase
+## Phase 5 — Messaging & Notifications
 
-Phase 5 will add messaging between patients and doctors, notifications, and enhanced medical record capabilities.
+Phase 5 adds patient-doctor messaging, doctor internal notes, read receipts, and in-app notifications. Statuses expanded with `INTAKE_COMPLETED`, `DOCTOR_REVIEW`, `PHYSICAL_VISIT_REQUIRED`, and `TRANSFERRED`.
+
+### Messaging Rules
+
+| Status | Messaging allowed? |
+|--------|:---:|
+| submitted, accepted, intake_in_progress, intake_completed, doctor_review, awaiting_patient/doctor, under_review, follow_up_required, physical_visit_required, transferred | ✅ |
+| completed, cancelled, emergency_escalated | ❌ |
+
+### Notification Events
+
+| Event | Recipient | When |
+|-------|-----------|------|
+| Consultation accepted | Patient | Doctor accepts |
+| Consultation cancelled | Both participants | Either cancels |
+| New message | Non-sender participant | Message sent |
+| Intake completed* | Doctor | Intake finishes |
+| Record confirmed | Doctor | Patient confirms |
+| Record revision requested | Doctor | Patient declines |
