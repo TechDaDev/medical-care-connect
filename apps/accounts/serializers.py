@@ -115,7 +115,11 @@ class RegisterPatientSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(TokenObtainPairSerializer):
-    """Extend the default token pair serializer to return user data."""
+    """Extend the default token pair serializer to return user data.
+
+    Stores tokens in ``self.tokens`` so the view can access them for
+    setting HTTP-only cookies.
+    """
 
     def validate(self, attrs):
         data = super().validate(attrs)
@@ -124,5 +128,7 @@ class LoginSerializer(TokenObtainPairSerializer):
             raise serializers.ValidationError(
                 {"detail": "Account is disabled."}
             )
+        # Store tokens for the view to set cookies
+        self.tokens = {"access": data["access"], "refresh": data["refresh"]}
         data["user"] = CurrentUserSerializer(user).data
         return data

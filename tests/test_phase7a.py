@@ -59,7 +59,10 @@ def _login(client, email="test@example.com"):
         {"email": email, "password": "testpass123"},
         format="json",
     )
-    return resp.data
+    token = resp.cookies.get("mcc_access")
+    token_value = token.value if token else None
+    client.cookies.clear()
+    return token_value
 
 
 # ── Test 1: Seed command idempotence ────────────────────────────────────────
@@ -105,7 +108,7 @@ class PatientDashboardTests(TestCase):
 
         client = APIClient()
         token = _login(client, "p1@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.get("/api/patients/me/dashboard/")
         self.assertEqual(resp.status_code, 200)
@@ -137,7 +140,7 @@ class DoctorDashboardTests(TestCase):
 
         client = APIClient()
         token = _login(client, "doc@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.get("/api/doctors/me/dashboard/")
         self.assertEqual(resp.status_code, 200)
@@ -154,7 +157,7 @@ class StaffAuthTests(TestCase):
         _create_patient(user)
         client = APIClient()
         token = _login(client, "pat@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.get("/api/staff/dashboard/")
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
@@ -183,7 +186,7 @@ class TransferTests(TestCase):
 
         client = APIClient()
         token = _login(client, "coord@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.post(
             f"/api/staff/consultations/{consultation.id}/transfer/",
@@ -223,7 +226,7 @@ class TransferValidationTests(TestCase):
 
         client = APIClient()
         token = _login(client, "coord@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.post(
             f"/api/staff/consultations/{consultation.id}/transfer/",
@@ -250,7 +253,7 @@ class PriorityUpdateTests(TestCase):
 
         client = APIClient()
         token = _login(client, "pat@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
         resp = client.patch(
             f"/api/staff/consultations/{consultation.id}/priority/",
@@ -279,7 +282,7 @@ class ActionFlagsTests(TestCase):
         # Patient view
         client = APIClient()
         token = _login(client, "pat@test.com")
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token['access']}")
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
         resp = client.get(f"/api/consultations/{consultation.id}/")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("actions", resp.data)
@@ -289,7 +292,7 @@ class ActionFlagsTests(TestCase):
         # Doctor view
         client2 = APIClient()
         token2 = _login(client2, "doc@test.com")
-        client2.credentials(HTTP_AUTHORIZATION=f"Bearer {token2['access']}")
+        client2.credentials(HTTP_AUTHORIZATION=f"Bearer {token2}")
         resp2 = client2.get(f"/api/consultations/{consultation.id}/")
         self.assertEqual(resp2.status_code, 200)
         self.assertTrue(resp2.data["actions"]["can_accept"])

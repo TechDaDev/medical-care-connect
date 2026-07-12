@@ -1,13 +1,18 @@
+from django.conf import settings
 from django.db import connections
 from django.db.utils import OperationalError
-from django.conf import settings
-from rest_framework import status
+from django.middleware.csrf import get_token as get_csrf_token
+from rest_framework import exceptions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+)
 
 from apps.accounts.serializers import (
     CurrentUserSerializer,
@@ -15,23 +20,20 @@ from apps.accounts.serializers import (
     RegisterPatientSerializer,
     UpdateUserSerializer,
 )
-from apps.accounts.permissions import IsPatient
+from apps.accounts.utils import clear_auth_cookies, set_auth_cookies
 
+
+# ── Health ──────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request: Request) -> Response:
-    """Basic health check endpoint."""
     return Response({"status": "healthy"})
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def readiness_check(request: Request) -> Response:
-    """Readiness probe — checks database and AI intake config.
-
-    Never exposes secrets or stack traces.
-    """
     db_available = False
     try:
         conn = connections["default"]
@@ -55,76 +57,134 @@ def readiness_check(request: Request) -> Response:
     return Response(result)
 
 
+# ── Current User ────────────────────────────────────────────────────────────
+
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def current_user(request: Request) -> Response:
-    """Return or update the currently authenticated user's profile.
-
-    GET  → return current user data.
-    PATCH → update first_name, last_name, phone_number.
-    """
     if request.method == "GET":
         serializer = CurrentUserSerializer(request.user)
         return Response(serializer.data)
 
-    # PATCH – allow partial update of basic profile fields
     serializer = UpdateUserSerializer(request.user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(CurrentUserSerializer(request.user).data)
 
 
+# ── Register ────────────────────────────────────────────────────────────────
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register_patient(request: Request) -> Response:
     """Register a new patient account.
 
-    Creates the user with role=patient and a linked PatientProfile.
-    Returns JWT tokens and serialized user data.
+    Sets JWT HTTP-only cookies on success.
+    Returns serialized user data (no raw tokens in JSON body).
     """
     serializer = RegisterPatientSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
 
     refresh = RefreshToken.for_user(user)
-    return Response(
-        {
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-            "user": CurrentUserSerializer(user).data,
-        },
-        status=status.HTTP_201_CREATED,
-    )
+    data = {"user": CurrentUserSerializer(user).data}
+    response = Response(data, status=status.HTTP_201_CREATED)
+    set_auth_cookies(response, str(refresh.access_token), str(refresh))
+    return response
 
+
+# ── Login ───────────────────────────────────────────────────────────────────
 
 class LoginView(TokenObtainPairView):
     """Log in with email and password.
 
-    Returns access token, refresh token, and serialized user data.
+    Sets JWT HTTP-only cookies on success.
+    Returns serialized user data (no raw tokens in JSON body).
     Rejects inactive accounts.
     """
     serializer_class = LoginSerializer
 
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except exceptions.ValidationError:
+            return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception:
+            return Response(
+                {"detail": "Unable to log in with provided credentials."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        tokens = getattr(serializer, "tokens", None)
+        response_data = {"user": serializer.validated_data.get("user", {})}
+        response = Response(response_data, status=status.HTTP_200_OK)
+
+        if tokens:
+            set_auth_cookies(response, tokens["access"], tokens["refresh"])
+        return response
+
+
+# ── Token Refresh (cookie-aware) ───────────────────────────────────────────
+
+class CookieTokenRefreshView(TokenRefreshView):
+    """Refresh access token using refresh token from HTTP-only cookie.
+
+    Also accepts ``refresh`` in JSON body for backward compatibility.
+    """
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        if response.status_code == status.HTTP_200_OK:
+            access_token = response.data.get("access")
+            if access_token:
+                set_auth_cookies(response, access_token, refresh_token=None)
+                # If refresh came from cookie, return empty body
+                has_refresh_in_body = "refresh" in request.data
+                if not has_refresh_in_body:
+                    response.data = {}
+        return super().finalize_response(request, response, *args, **kwargs)
+
+
+# ── Logout ─────────────────────────────────────────────────────────────────
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def logout_view(request: Request) -> Response:
-    """Log out by blacklisting the refresh token.
+    """Log out by blacklisting the refresh token and clearing cookies.
 
-    Requires authentication. Accepts the refresh token in the request body.
+    Reads refresh token from HTTP-only cookie first, then falls back
+    to JSON body.
     """
-    try:
-        refresh_token = request.data.get("refresh")
-        if not refresh_token:
-            return Response(
-                {"detail": "Refresh token is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        token = RefreshToken(refresh_token)
-        token.blacklist()
-        return Response({"detail": "Successfully logged out."})
-    except Exception:
+    refresh_token = request.COOKIES.get(
+        settings.SIMPLE_JWT.get("AUTH_COOKIE_REFRESH", "mcc_refresh")
+    ) or request.data.get("refresh")
+
+    if not refresh_token:
         return Response(
-            {"detail": "Invalid or expired refresh token."},
+            {"detail": "Refresh token is required."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    try:
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+    except (TokenError, InvalidToken):
+        pass  # Token invalid — still clear cookies
+
+    response = Response({"detail": "Successfully logged out."})
+    clear_auth_cookies(response)
+    return response
+
+
+# ── CSRF Token ──────────────────────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def csrf_token(request: Request) -> Response:
+    """Return a CSRF token for the current session.
+
+    Client must send this token in the ``X-CSRFToken`` header for
+    state-changing requests (POST/PUT/PATCH/DELETE).
+    """
+    token = get_csrf_token(request)
+    return Response({"csrfToken": token})

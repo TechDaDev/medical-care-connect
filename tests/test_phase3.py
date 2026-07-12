@@ -29,7 +29,10 @@ def _login(client, email: str, password: str) -> str | None:
     resp = _jpost(client, reverse("accounts:login"), {"email": email, "password": password})
     if resp.status_code != 200:
         return None
-    return resp.json()["access"]
+    token = resp.cookies.get("mcc_access")
+    token_value = token.value if token else None
+    client.cookies.clear()
+    return token_value
 
 
 class PublicDoctorDirectoryTests(TestCase):

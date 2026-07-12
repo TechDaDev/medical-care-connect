@@ -26,11 +26,23 @@ def _jpost(client, url: str, data: dict, **kwargs):
 
 
 def _login(client, email: str, password: str) -> str | None:
-    """Helper: log in and return access token, or None."""
+    """Helper: log in, clear cookies, return the access token string.
+
+    Tokens now live in HTTP-only cookies.  We extract the value from
+    the response cookie but then clear the client's cookie jar so tests
+    that check 401/403 behaviour are not accidentally authenticated
+    by a lingering cookie.
+    """
     resp = _jpost(client, reverse("accounts:login"), {"email": email, "password": password})
     if resp.status_code != 200:
         return None
-    return resp.json()["access"]
+    token_value = None
+    cookie = resp.cookies.get("mcc_access")
+    if cookie:
+        token_value = cookie.value
+    # Remove the cookie so subsequent requests use the Bearer header
+    client.cookies.clear()
+    return token_value
 
 
 class PatientRegistrationTests(TestCase):
@@ -49,11 +61,15 @@ class PatientRegistrationTests(TestCase):
         response = self.client.post(url, json.dumps(payload), content_type="application/json")
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertIn("access", data)
-        self.assertIn("refresh", data)
+        # Tokens are now in HTTP-only cookies, not JSON body
+        self.assertNotIn("access", data)
+        self.assertNotIn("refresh", data)
         self.assertIn("user", data)
         self.assertEqual(data["user"]["email"], "patient@example.com")
         self.assertEqual(data["user"]["role"], "patient")
+        # Verify cookies were set
+        self.assertIn("mcc_access", response.cookies)
+        self.assertIn("mcc_refresh", response.cookies)
 
         user = User.objects.get(email="patient@example.com")
         self.assertEqual(user.role, UserRole.PATIENT)
@@ -121,10 +137,14 @@ class LoginLogoutTests(TestCase):
         response = _jpost(self.client, url, {"email": "test@example.com", "password": "testpass123"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("access", data)
-        self.assertIn("refresh", data)
+        # Tokens are in HTTP-only cookies, not JSON body
+        self.assertNotIn("access", data)
+        self.assertNotIn("refresh", data)
         self.assertIn("user", data)
         self.assertEqual(data["user"]["email"], "test@example.com")
+        # Verify cookies were set
+        self.assertIn("mcc_access", response.cookies)
+        self.assertIn("mcc_refresh", response.cookies)
 
     def test_login_inactive_account(self) -> None:
         self.user.is_active = False
