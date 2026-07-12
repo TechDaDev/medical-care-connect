@@ -16,17 +16,53 @@ from apps.consultations.serializers import (
 )
 
 
-# ── Consultation CRUD ───────────────────────────────────────────────────────
+# ── Consultation Collection ─────────────────────────────────────────────────
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated, IsPatient])
-def create_consultation(request: Request) -> Response:
-    """Create a new consultation request.
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def consultation_collection(request: Request) -> Response:
+    """List or create consultations.
 
-    Patient-only. Sets status=submitted and submitted_at.
-    Validates doctor is approved, accepting, and active.
+    GET  → list based on user role (patient owns, doctor assigned, staff all).
+    POST → create a new consultation (patient-only).
     """
+    if request.method == "GET":
+        return _list_consultations(request)
+
+    return _create_consultation(request)
+
+
+def _list_consultations(request: Request) -> Response:
+    """List consultations based on user role."""
+    user = request.user
+    queryset = Consultation.objects.select_related(
+        "patient__user", "doctor__user", "specialty"
+    )
+
+    if user.role == UserRole.PATIENT and hasattr(user, "patient_profile"):
+        queryset = queryset.filter(patient=user.patient_profile)
+    elif user.role == UserRole.DOCTOR and hasattr(user, "doctor_profile"):
+        queryset = queryset.filter(doctor=user.doctor_profile)
+    elif user.role not in (UserRole.COORDINATOR, UserRole.ADMINISTRATOR):
+        return Response(
+            {"detail": "You do not have permission to view consultations."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    serializer = ConsultationSerializer(queryset, many=True)
+    return Response(serializer.data)
+
+
+def _create_consultation(request: Request) -> Response:
+    """Create a new consultation. Patient-only."""
+    # Enforce patient role
+    if request.user.role != UserRole.PATIENT:
+        return Response(
+            {"detail": "Only patients can create consultations."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     serializer = ConsultationCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
@@ -45,34 +81,6 @@ def create_consultation(request: Request) -> Response:
 
     output = ConsultationSerializer(consultation)
     return Response(output.data, status=status.HTTP_201_CREATED)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def list_consultations(request: Request) -> Response:
-    """List consultations based on user role.
-
-    Patient → own consultations.
-    Doctor → assigned consultations.
-    Coordinator/Admin → all consultations.
-    """
-    user = request.user
-    queryset = Consultation.objects.select_related(
-        "patient__user", "doctor__user", "specialty"
-    )
-
-    if user.role == UserRole.PATIENT and hasattr(user, "patient_profile"):
-        queryset = queryset.filter(patient=user.patient_profile)
-    elif user.role == UserRole.DOCTOR and hasattr(user, "doctor_profile"):
-        queryset = queryset.filter(doctor=user.doctor_profile)
-    elif user.role not in (UserRole.COORDINATOR, UserRole.ADMINISTRATOR):
-        return Response(
-            {"detail": "You do not have permission to view consultations."},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    serializer = ConsultationSerializer(queryset, many=True)
-    return Response(serializer.data)
 
 
 @api_view(["GET"])

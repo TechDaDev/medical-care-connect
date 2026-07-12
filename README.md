@@ -128,8 +128,7 @@ mcc_backend/
 | `GET` | `/api/specialties/<id>/` | No | Retrieve a specialty |
 | `POST` | `/api/specialties/` | Yes | Create a specialty |
 | `PATCH` | `/api/specialties/<id>/` | Yes | Update a specialty |
-| `POST` | `/api/consultations/create/` | Yes (Patient) | Create consultation request |
-| `GET` | `/api/consultations/` | Yes | List consultations (role-scoped) |
+| `GET`, `POST` | `/api/consultations/` | Yes | List (role-scoped) / Create (Patient) consultation |
 | `GET` | `/api/consultations/<id>/` | Yes | Consultation detail |
 | `POST` | `/api/consultations/<id>/accept/` | Yes (Doctor) | Accept consultation |
 | `POST` | `/api/consultations/<id>/cancel/` | Yes | Cancel consultation (requires reason) |

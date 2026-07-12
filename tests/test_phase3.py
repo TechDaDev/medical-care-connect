@@ -166,7 +166,7 @@ class ConsultationTests(TestCase):
         self._coord_auth = {"HTTP_AUTHORIZATION": f"Bearer {self.coord_token}"}
 
     def test_create_consultation_patient_only(self):
-        url = reverse("consultations:create")
+        url = reverse("consultations:list")
         resp = _jpost(self.client, url, {"doctor": str(self.doc.id)}, **self._pat_auth)
         self.assertEqual(resp.status_code, 201)
         data = resp.json()
@@ -176,7 +176,7 @@ class ConsultationTests(TestCase):
     def test_create_consultation_doctor_not_accepting(self):
         self.doc.is_accepting_consultations = False
         self.doc.save()
-        url = reverse("consultations:create")
+        url = reverse("consultations:list")
         resp = _jpost(self.client, url, {"doctor": str(self.doc.id)}, **self._pat_auth)
         self.assertEqual(resp.status_code, 400)
 
