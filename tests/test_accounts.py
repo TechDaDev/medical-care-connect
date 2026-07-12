@@ -66,7 +66,7 @@ class UserAPITests(TestCase):
     def test_me_endpoint_requires_auth(self) -> None:
         url = reverse("accounts:current-user")
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_me_endpoint_authenticated(self) -> None:
         user = User.objects.create_user(

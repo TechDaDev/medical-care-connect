@@ -6,13 +6,16 @@ A modular Django backend that powers a platform connecting patients with healthc
 
 ## Current Phase
 
-**Phase 1 — Backend Foundation (complete)**
+**Phase 2 — Authentication, Profiles & Specialties (complete)**
 
-- Django project with split settings (base / development / production)
-- Custom user model (UUID PK, email login, role-based)
-- Accounts API with health check
-- Modular monolith application structure
-- PostgreSQL-ready configuration with SQLite development fallback
+- JWT authentication (access + refresh tokens) via `djangorestframework-simplejwt`
+- Patient registration (auto-creates `User` + `PatientProfile`)
+- Role-based permission classes (`IsPatient`, `IsDoctor`, `IsCoordinator`, `IsAdministrator`, etc.)
+- Token blacklisting for secure logout
+- Specialty management (CRUD via admin; public list/retrieve)
+- Patient profiles (date of birth, gender, blood type, emergency contact, language)
+- Doctor profiles (specialty, license, qualifications, approval workflow, fee)
+- Approval workflow: doctors created through admin, approved by coordinator/administrator
 
 ## Requirements
 
@@ -90,34 +93,45 @@ mcc_backend/
 │   └── wsgi.py
 ├── apps/
 │   ├── core/            # BaseModel abstract class
-│   ├── accounts/        # Custom user model, API
-│   ├── patients/        # Placeholder
-│   ├── doctors/         # Placeholder
-│   ├── specialties/     # Placeholder
+│   ├── accounts/        # Custom user model, JWT auth, permissions
+│   ├── patients/        # Patient profiles
+│   ├── doctors/         # Doctor profiles
+│   ├── specialties/     # Medical specialties
 │   ├── consultations/   # Placeholder
 │   ├── messaging/       # Placeholder
 │   ├── medical_records/ # Placeholder
 │   ├── ai_intake/       # Placeholder
 │   ├── notifications/   # Placeholder
 │   └── audit/           # Placeholder
-└── tests/               # Essential tests
+└── tests/               # Unit & integration tests
 ```
 
 ## API Endpoints
 
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `GET /api/health/` | No | Health check |
-| `GET /api/accounts/me/` | Yes | Current user profile |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/health/` | No | Health check |
+| `POST` | `/api/auth/register/patient/` | No | Register patient (auto-creates profile) |
+| `POST` | `/api/auth/login/` | No | Log in (returns JWT tokens + user) |
+| `POST` | `/api/auth/token/refresh/` | No | Refresh access token |
+| `POST` | `/api/auth/logout/` | Yes (JWT) | Log out (blacklists refresh token) |
+| `GET` / `PATCH` | `/api/accounts/me/` | Yes (JWT) | Get/update current user profile |
+| `GET` / `PATCH` | `/api/patients/me/` | Yes (Patient) | Get/update own patient profile |
+| `GET` / `PATCH` | `/api/doctors/me/` | Yes (Doctor) | Get/update own doctor profile |
+| `GET` | `/api/specialties/` | No | List all specialties |
+| `GET` | `/api/specialties/<id>/` | No | Retrieve a specialty |
+| `POST` | `/api/specialties/` | Yes | Create a specialty |
+| `PATCH` | `/api/specialties/<id>/` | Yes | Update a specialty |
 
 ## Tech Stack
 
 - **Python 3.12+**
 - **Django 5.1** with Django REST Framework
 - **PostgreSQL** (production) / **SQLite** (development)
+- **JWT authentication** via `djangorestframework-simplejwt`
 - `django-environ` for configuration
 - `django-cors-headers` for CORS
 
 ## Next Phase
 
-Phase 2 will add JWT authentication, user registration, and login endpoints.
+Phase 3 will add consultation workflows, patient intake forms, and AI-assisted triage.

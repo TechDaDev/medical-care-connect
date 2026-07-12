@@ -1,10 +1,18 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.accounts import views
 
 app_name = "accounts"
 
 urlpatterns = [
+    # Health
     path("health/", views.health_check, name="health-check"),
+    # Auth
+    path("auth/register/patient/", views.register_patient, name="register-patient"),
+    path("auth/login/", views.LoginView.as_view(), name="login"),
+    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("auth/logout/", views.logout_view, name="logout"),
+    # Current user
     path("accounts/me/", views.current_user, name="current-user"),
 ]
