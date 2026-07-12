@@ -74,3 +74,50 @@ class DoctorProfile(BaseModel):
     def save(self, *args, **kwargs):
         self.clean()
         super().save(*args, **kwargs)
+
+
+class Weekday(models.TextChoices):
+    MONDAY = "monday", _("Monday")
+    TUESDAY = "tuesday", _("Tuesday")
+    WEDNESDAY = "wednesday", _("Wednesday")
+    THURSDAY = "thursday", _("Thursday")
+    FRIDAY = "friday", _("Friday")
+    SATURDAY = "saturday", _("Saturday")
+    SUNDAY = "sunday", _("Sunday")
+
+
+class DoctorAvailability(BaseModel):
+    """Availability slot for a doctor."""
+
+    doctor = models.ForeignKey(
+        DoctorProfile,
+        on_delete=models.CASCADE,
+        related_name="availability_slots",
+        verbose_name=_("doctor"),
+    )
+    day_of_week = models.CharField(
+        _("day of week"),
+        max_length=10,
+        choices=Weekday.choices,
+    )
+    start_time = models.TimeField(_("start time"))
+    end_time = models.TimeField(_("end time"))
+    is_active = models.BooleanField(_("active"), default=True)
+
+    class Meta:
+        verbose_name = _("doctor availability")
+        verbose_name_plural = _("doctor availabilities")
+        ordering = ["doctor", "day_of_week", "start_time"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["doctor", "day_of_week", "start_time", "end_time"],
+                name="unique_doctor_availability_slot",
+            ),
+            models.CheckConstraint(
+                check=models.Q(start_time__lt=models.F("end_time")),
+                name="avail_start_before_end",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.doctor} - {self.day_of_week} {self.start_time}-{self.end_time}"

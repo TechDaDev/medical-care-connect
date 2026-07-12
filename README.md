@@ -6,16 +6,17 @@ A modular Django backend that powers a platform connecting patients with healthc
 
 ## Current Phase
 
-**Phase 2 — Authentication, Profiles & Specialties (complete)**
+**Phase 3 — Public Doctor Directory, Availability & Consultations (complete)**
 
-- JWT authentication (access + refresh tokens) via `djangorestframework-simplejwt`
-- Patient registration (auto-creates `User` + `PatientProfile`)
-- Role-based permission classes (`IsPatient`, `IsDoctor`, `IsCoordinator`, `IsAdministrator`, etc.)
-- Token blacklisting for secure logout
-- Specialty management (CRUD via admin; public list/retrieve)
-- Patient profiles (date of birth, gender, blood type, emergency contact, language)
-- Doctor profiles (specialty, license, qualifications, approval workflow, fee)
-- Approval workflow: doctors created through admin, approved by coordinator/administrator
+- Public doctor directory with filtering (specialty, specialty_slug, accepting, language, search, ordering)
+- `DoctorAvailability` model per doctor (day_of_week, start_time, end_time, is_active)
+- Doctor availability CRUD via API
+- Accepting-consultations status toggle
+- `Consultation` model with full lifecycle (submitted → accepted → cancelled)
+- Patient creates consultations (validates doctor approved+accepting+active)
+- Role-scoped consultation list/detail (patient owns, doctor assigned, coordinator/admin all)
+- Accept endpoint (assigned doctor only, submitted → accepted)
+- Cancel endpoint (patient/doctor/coordinator/admin, requires reason)
 
 ## Requirements
 
@@ -97,7 +98,7 @@ mcc_backend/
 │   ├── patients/        # Patient profiles
 │   ├── doctors/         # Doctor profiles
 │   ├── specialties/     # Medical specialties
-│   ├── consultations/   # Placeholder
+│   ├── consultations/   # Consultation requests
 │   ├── messaging/       # Placeholder
 │   ├── medical_records/ # Placeholder
 │   ├── ai_intake/       # Placeholder
@@ -118,10 +119,20 @@ mcc_backend/
 | `GET` / `PATCH` | `/api/accounts/me/` | Yes (JWT) | Get/update current user profile |
 | `GET` / `PATCH` | `/api/patients/me/` | Yes (Patient) | Get/update own patient profile |
 | `GET` / `PATCH` | `/api/doctors/me/` | Yes (Doctor) | Get/update own doctor profile |
+| `GET` / `POST` | `/api/doctors/me/availability/` | Yes (Doctor) | List/create own availability slots |
+| `PATCH` / `DELETE` | `/api/doctors/me/availability/<id>/` | Yes (Doctor) | Update/delete a slot |
+| `PATCH` | `/api/doctors/me/availability-status/` | Yes (Doctor/Admin) | Toggle accepting consultations |
+| `GET` | `/api/doctors/` | No | List approved doctors (public directory) |
+| `GET` | `/api/doctors/<id>/` | No | Doctor public profile |
 | `GET` | `/api/specialties/` | No | List all specialties |
 | `GET` | `/api/specialties/<id>/` | No | Retrieve a specialty |
 | `POST` | `/api/specialties/` | Yes | Create a specialty |
 | `PATCH` | `/api/specialties/<id>/` | Yes | Update a specialty |
+| `POST` | `/api/consultations/create/` | Yes (Patient) | Create consultation request |
+| `GET` | `/api/consultations/` | Yes | List consultations (role-scoped) |
+| `GET` | `/api/consultations/<id>/` | Yes | Consultation detail |
+| `POST` | `/api/consultations/<id>/accept/` | Yes (Doctor) | Accept consultation |
+| `POST` | `/api/consultations/<id>/cancel/` | Yes | Cancel consultation (requires reason) |
 
 ## Tech Stack
 
@@ -134,4 +145,4 @@ mcc_backend/
 
 ## Next Phase
 
-Phase 3 will add consultation workflows, patient intake forms, and AI-assisted triage.
+Phase 4 will add AI-assisted intake, messaging between patients and doctors, and medical record management.
