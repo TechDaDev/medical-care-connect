@@ -1,3 +1,6 @@
+from django.db import connections
+from django.db.utils import OperationalError
+from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -18,8 +21,38 @@ from apps.accounts.permissions import IsPatient
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request: Request) -> Response:
-    """Basic health check endpoint. No authentication required."""
+    """Basic health check endpoint."""
     return Response({"status": "healthy"})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def readiness_check(request: Request) -> Response:
+    """Readiness probe — checks database and AI intake config.
+
+    Never exposes secrets or stack traces.
+    """
+    db_available = False
+    try:
+        conn = connections["default"]
+        conn.ensure_connection()
+        db_available = True
+    except OperationalError:
+        db_available = False
+
+    ai_status = "disabled"
+    if settings.AI_INTAKE_ENABLED:
+        ai_status = "enabled" if settings.DEEPSEEK_API_KEY else "misconfigured"
+
+    result = {
+        "status": "ready" if db_available else "unavailable",
+        "database": "available" if db_available else "unavailable",
+        "ai_intake": ai_status,
+    }
+
+    if not db_available:
+        return Response(result, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response(result)
 
 
 @api_view(["GET", "PATCH"])

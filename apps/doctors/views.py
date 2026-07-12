@@ -7,6 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.accounts.permissions import IsDoctor, IsDoctorOrAdministrator
+from apps.consultations.models import Consultation
 from apps.doctors.models import DoctorAvailability, DoctorProfile
 from apps.doctors.serializers import (
     DoctorAcceptingStatusSerializer,
@@ -43,6 +44,66 @@ def my_doctor_profile(request: Request) -> Response:
     return Response(detail_serializer.data)
 
 
+# ── Doctor Dashboard Summary ────────────────────────────────────────────────
+
+
+from django.db.models import Q
+from apps.messaging.services import get_unread_message_counts
+from apps.notifications.models import Notification
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsDoctor])
+def my_doctor_dashboard(request: Request) -> Response:
+    """Dashboard summary for the authenticated doctor."""
+    profile = getattr(request.user, "doctor_profile", None)
+    if profile is None:
+        return Response(
+            {"detail": "Doctor profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    consultations = Consultation.objects.filter(doctor=profile)
+    unread_messages = 0
+    for c in consultations:
+        counts = get_unread_message_counts(c, request.user)
+        unread_messages += counts["unread_count"]
+
+    unread_notifications = Notification.objects.filter(
+        recipient=request.user, is_read=False
+    ).count()
+
+    return Response({
+        "consultations": {
+            "total_active": consultations.filter(
+                status__in=(
+                    "submitted", "accepted", "intake_in_progress",
+                    "intake_completed", "doctor_review",
+                    "awaiting_patient_response", "awaiting_doctor_response",
+                    "under_review", "follow_up_required", "physical_visit_required",
+                    "transferred",
+                ),
+            ).count(),
+            "submitted": consultations.filter(status="submitted").count(),
+            "accepted": consultations.filter(status="accepted").count(),
+            "intake_completed": consultations.filter(status="intake_completed").count(),
+            "doctor_review": consultations.filter(status="doctor_review").count(),
+            "awaiting_patient": consultations.filter(
+                status="awaiting_patient_response"
+            ).count(),
+            "awaiting_doctor": consultations.filter(
+                status="awaiting_doctor_response"
+            ).count(),
+        },
+        "unread_messages": unread_messages,
+        "unread_notifications": unread_notifications,
+        "profile": {
+            "is_approved": profile.is_approved,
+            "is_accepting_consultations": profile.is_accepting_consultations,
+        },
+    })
+
+
 # ── Public Doctor Directory ─────────────────────────────────────────────────
 
 
@@ -54,10 +115,10 @@ def public_doctor_list(request: Request) -> Response:
     Filters:
     - specialty (UUID)
     - specialty_slug (str)
-    - accepting (bool) — exclude non-accepting when true
-    - language (str) — match in languages JSON array
-    - search (str) — name / professional_title match
-    - ordering (str) — default: years_of_experience
+    - accepting (bool) - exclude non-accepting when true
+    - language (str) - match in languages JSON array
+    - search (str) - name / professional_title match
+    - ordering (str) - default: years_of_experience
     """
     queryset = DoctorProfile.objects.select_related(
         "user", "specialty"
@@ -97,6 +158,21 @@ def public_doctor_list(request: Request) -> Response:
     ):
         ordering = "years_of_experience"
     queryset = queryset.order_by(ordering)
+
+    page = request.query_params.get("page")
+    page_size = request.query_params.get("page_size", 20)
+    if page is not None:
+        from rest_framework.pagination import PageNumberPagination
+
+        class DoctorPagination(PageNumberPagination):
+            page_size = 20
+            page_size_query_param = "page_size"
+            max_page_size = 100
+
+        paginator = DoctorPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = PublicDoctorListSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     serializer = PublicDoctorListSerializer(queryset, many=True)
     return Response(serializer.data)
@@ -172,7 +248,7 @@ def my_availability_detail(request: Request, pk: str) -> Response:
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated, IsDoctorOrAdministrator])
 def update_accepting_status(request: Request) -> Response:
-    """Toggle the doctor's accepting-consultations flag."""
+    """Toggle the doctor accepting-consultations flag."""
     # Allow admins/coordinators to set for any doctor, or doctor to set own
     profile = getattr(request.user, "doctor_profile", None)
     if profile is None:

@@ -89,3 +89,91 @@ class Consultation(BaseModel):
 
     def __str__(self) -> str:
         return f"Consultation {self.id} - {self.patient} -> Dr. {self.doctor}"
+
+
+class ConsultationTransfer(BaseModel):
+    """Records a consultation transfer between doctors."""
+
+    consultation = models.ForeignKey(
+        Consultation,
+        on_delete=models.CASCADE,
+        related_name="transfers",
+        verbose_name=_("consultation"),
+    )
+    previous_doctor = models.ForeignKey(
+        "doctors.DoctorProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="transfers_out",
+        verbose_name=_("previous doctor"),
+    )
+    new_doctor = models.ForeignKey(
+        "doctors.DoctorProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="transfers_in",
+        verbose_name=_("new doctor"),
+    )
+    transferred_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="initiated_transfers",
+        verbose_name=_("transferred by"),
+    )
+    reason = models.TextField(
+        _("reason"),
+        max_length=1000,
+        help_text=_("Reason for the transfer."),
+    )
+
+    class Meta:
+        verbose_name = _("consultation transfer")
+        verbose_name_plural = _("consultation transfers")
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Transfer {self.id}: {self.consultation.id}"
+
+
+class ConsultationPriorityChange(BaseModel):
+    """Audit log for priority changes on consultations."""
+
+    consultation = models.ForeignKey(
+        Consultation,
+        on_delete=models.CASCADE,
+        related_name="priority_changes",
+        verbose_name=_("consultation"),
+    )
+    previous_priority = models.CharField(
+        _("previous priority"),
+        max_length=10,
+    )
+    new_priority = models.CharField(
+        _("new priority"),
+        max_length=10,
+    )
+    changed_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="priority_changes",
+        verbose_name=_("changed by"),
+    )
+    reason = models.TextField(
+        _("reason"),
+        max_length=500,
+        blank=True,
+        help_text=_("Optional reason for the priority change."),
+    )
+
+    class Meta:
+        verbose_name = _("consultation priority change")
+        verbose_name_plural = _("consultation priority changes")
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return (
+            f"Priority {self.consultation.id}: "
+            f"{self.previous_priority} → {self.new_priority}"
+        )

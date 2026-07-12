@@ -15,6 +15,7 @@ from apps.consultations.models import Consultation, ConsultationStatus
 from apps.consultations.serializers import (
     ConsultationCancelSerializer,
     ConsultationCreateSerializer,
+    ConsultationDetailSerializer,
     ConsultationSerializer,
 )
 
@@ -92,7 +93,8 @@ def consultation_detail(request: Request, pk: str) -> Response:
     """Get a single consultation. Role-scoped access."""
     consultation = get_object_or_404(
         Consultation.objects.select_related(
-            "patient__user", "doctor__user", "specialty"
+            "patient__user", "doctor__user", "specialty",
+            "intake_session", "medical_record",
         ),
         pk=pk,
     )
@@ -108,7 +110,9 @@ def consultation_detail(request: Request, pk: str) -> Response:
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    serializer = ConsultationSerializer(consultation)
+    serializer = ConsultationDetailSerializer(
+        consultation, context={"request": request}
+    )
     return Response(serializer.data)
 
 

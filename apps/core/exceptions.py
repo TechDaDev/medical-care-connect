@@ -1,0 +1,99 @@
+"""Custom DRF exception handler for consistent API error responses."""
+
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+from django.http import Http404
+from rest_framework import exceptions, status
+from rest_framework.response import Response
+from rest_framework.views import exception_handler
+
+
+def custom_exception_handler(exc, context):
+    """DRF exception handler that normalizes error responses.
+
+    Returns:
+        {
+            "detail": "Human-readable message",
+            "code": "error_code",
+            "fields": { ... }   # validation errors per field (optional)
+        }
+    """
+    response = exception_handler(exc, context)
+
+    if response is not None:
+        detail = _extract_detail(response.data)
+        errors = {
+            "detail": detail,
+            "code": _get_code(exc),
+        }
+
+        # Preserve DRF field-level validation errors
+        if isinstance(response.data, dict) and any(
+            isinstance(v, (list, dict)) for v in response.data.values()
+        ):
+            errors["fields"] = response.data
+
+        response.data = errors
+    else:
+        # Handle non-DRF exceptions gracefully
+        response = _handle_unhandled_exception(exc)
+
+    return response
+
+
+def _extract_detail(data):
+    """Extract a readable detail string from DRF error data."""
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list) and data:
+        item = data[0]
+        return str(item) if isinstance(item, str) else str(item[0]) if isinstance(item, (list, tuple)) else str(item)
+    if isinstance(data, dict):
+        # Look for a top-level "detail" key
+        if "detail" in data:
+            return _extract_detail(data["detail"])
+        # Pick the first field error
+        first_key = next(iter(data), None)
+        if first_key:
+            return _extract_detail(data[first_key])
+    return "An error occurred."
+
+
+def _get_code(exc):
+    """Map exception types to error codes."""
+    if isinstance(exc, exceptions.ValidationError):
+        return "validation_error"
+    if isinstance(exc, exceptions.AuthenticationFailed):
+        return "authentication_failed"
+    if isinstance(exc, exceptions.NotAuthenticated):
+        return "not_authenticated"
+    if isinstance(exc, exceptions.PermissionDenied):
+        return "permission_denied"
+    if isinstance(exc, DjangoPermissionDenied):
+        return "permission_denied"
+    if isinstance(exc, Http404):
+        return "not_found"
+    if isinstance(exc, exceptions.NotFound):
+        return "not_found"
+    if isinstance(exc, exceptions.MethodNotAllowed):
+        return "method_not_allowed"
+    if isinstance(exc, exceptions.Throttled):
+        return "throttled"
+    if isinstance(exc, exceptions.APIException):
+        # Check for specific status codes
+        if getattr(exc, "status_code", None) == status.HTTP_409_CONFLICT:
+            return "conflict"
+        return "api_error"
+    return "internal_error"
+
+
+def _handle_unhandled_exception(exc):
+    """Handle unhandled exceptions without exposing internals."""
+    if isinstance(exc, Http404):
+        return Response(
+            {"detail": "Not found.", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(
+        {"detail": "An unexpected error occurred.", "code": "internal_error"},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
