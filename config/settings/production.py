@@ -29,9 +29,9 @@ if "*" in ALLOWED_HOSTS:
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=True)
 CSRF_COOKIE_HTTPONLY = False  # JS reads CSRF token from cookie
 CSRF_COOKIE_SAMESITE = "Lax"
 SECURE_BROWSER_XSS_FILTER = True
@@ -43,7 +43,7 @@ SECURE_HSTS_PRELOAD = True
 SECURE_REFERRER_POLICY = "same-origin"
 
 # HTTP-only cookie JWT (secure in production)
-SIMPLE_JWT["AUTH_COOKIE_SECURE"] = True  # noqa: F405
+SIMPLE_JWT["AUTH_COOKIE_SECURE"] = env.bool("AUTH_COOKIE_SECURE", default=True)  # noqa: F405
 
 # ── Database ────────────────────────────────────────────────────────────────
 

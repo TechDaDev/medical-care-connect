@@ -26,17 +26,21 @@ services:
         condition: service_healthy
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
-      DB_NAME: ${DB_NAME:-mcc_production}
-      DB_USER: ${DB_USER:-mcc_user}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_HOST: db
-      DB_PORT: "5432"
+      POSTGRES_DB: ${DB_NAME:-mcc_production}
+      POSTGRES_USER: ${DB_USER:-mcc_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
       SECRET_KEY: ${SECRET_KEY}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
       SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-31536000}
       DATABASE_SSL_REQUIRE: ${DATABASE_SSL_REQUIRE:-false}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-true}
+      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-true}
     volumes:
       - static_volume:/app/staticfiles
 
@@ -44,6 +48,9 @@ services:
     build:
       context: ../mcc_frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=/api
+        - API_BACKEND_HOST=backend:8000
     restart: unless-stopped
     ports:
       - "80:80"
