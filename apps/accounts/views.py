@@ -3,7 +3,7 @@ from django.db import connections
 from django.db.utils import OperationalError
 from django.middleware.csrf import get_token as get_csrf_token
 from rest_framework import exceptions, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -19,6 +19,11 @@ from apps.accounts.serializers import (
     LoginSerializer,
     RegisterPatientSerializer,
     UpdateUserSerializer,
+)
+from apps.accounts.throttles import (
+    LoginRateThrottle,
+    RefreshRateThrottle,
+    RegisterRateThrottle,
 )
 from apps.accounts.utils import clear_auth_cookies, set_auth_cookies
 
@@ -76,6 +81,7 @@ def current_user(request: Request) -> Response:
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([RegisterRateThrottle])
 def register_patient(request: Request) -> Response:
     """Register a new patient account.
 
@@ -103,6 +109,7 @@ class LoginView(TokenObtainPairView):
     Rejects inactive accounts.
     """
     serializer_class = LoginSerializer
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -132,6 +139,7 @@ class CookieTokenRefreshView(TokenRefreshView):
 
     Also accepts ``refresh`` in JSON body for backward compatibility.
     """
+    throttle_classes = [RefreshRateThrottle]
 
     def finalize_response(self, request, response, *args, **kwargs):
         if response.status_code == status.HTTP_200_OK:
@@ -152,24 +160,21 @@ class CookieTokenRefreshView(TokenRefreshView):
 def logout_view(request: Request) -> Response:
     """Log out by blacklisting the refresh token and clearing cookies.
 
-    Reads refresh token from HTTP-only cookie first, then falls back
-    to JSON body.
+    Fully idempotent:
+    * always clears both cookies
+    * attempts blacklisting when a refresh token is present
+    * never returns 400 — success even when cookie is missing/expired/invalid
     """
     refresh_token = request.COOKIES.get(
         settings.SIMPLE_JWT.get("AUTH_COOKIE_REFRESH", "mcc_refresh")
     ) or request.data.get("refresh")
 
-    if not refresh_token:
-        return Response(
-            {"detail": "Refresh token is required."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    try:
-        token = RefreshToken(refresh_token)
-        token.blacklist()
-    except (TokenError, InvalidToken):
-        pass  # Token invalid — still clear cookies
+    if refresh_token:
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+        except (TokenError, InvalidToken):
+            pass  # Invalid/expired — still clear cookies
 
     response = Response({"detail": "Successfully logged out."})
     clear_auth_cookies(response)
@@ -181,10 +186,10 @@ def logout_view(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def csrf_token(request: Request) -> Response:
-    """Return a CSRF token for the current session.
+    """Obtain a CSRF token cookie for the current session.
 
-    Client must send this token in the ``X-CSRFToken`` header for
-    state-changing requests (POST/PUT/PATCH/DELETE).
+    Sets the ``mcc_csrftoken`` cookie (readable by JavaScript) so the
+    frontend can include it as ``X-CSRFToken`` on state-changing requests.
     """
-    token = get_csrf_token(request)
-    return Response({"csrfToken": token})
+    get_csrf_token(request)  # Sets the cookie as a side effect
+    return Response({"detail": "CSRF cookie set."})

@@ -183,7 +183,8 @@ class LoginLogoutTests(TestCase):
             url, json.dumps({}), content_type="application/json",
             **{"HTTP_AUTHORIZATION": f"Bearer {token}"},
         )
-        self.assertEqual(response.status_code, 400)
+        # Logout is idempotent — succeeds even without a refresh token
+        self.assertEqual(response.status_code, 200)
 
 
 class SpecialtiesAPITests(TestCase):
