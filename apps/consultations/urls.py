@@ -9,4 +9,9 @@ urlpatterns = [
     path("<uuid:pk>/", views.consultation_detail, name="detail"),
     path("<uuid:pk>/accept/", views.accept_consultation, name="accept"),
     path("<uuid:pk>/cancel/", views.cancel_consultation, name="cancel"),
+    path(
+        "<uuid:pk>/intake/start/",
+        views.start_intake,
+        name="intake-start",
+    ),
 ]

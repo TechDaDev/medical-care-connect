@@ -178,3 +178,15 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+# ── AI-Assisted Intake ──────────────────────────────────────────────────────
+
+AI_INTAKE_ENABLED = env("AI_INTAKE_ENABLED", default=False)
+AI_INTAKE_PROVIDER = env("AI_INTAKE_PROVIDER", default="deepseek")
+
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default=None)
+DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
+DEEPSEEK_MODEL = env("DEEPSEEK_MODEL", default=None)
+DEEPSEEK_TIMEOUT_SECONDS = env.int("DEEPSEEK_TIMEOUT_SECONDS", default=45)
+DEEPSEEK_MAX_TOKENS = env.int("DEEPSEEK_MAX_TOKENS", default=1200)
+DEEPSEEK_TEMPERATURE = env.float("DEEPSEEK_TEMPERATURE", default=0.2)

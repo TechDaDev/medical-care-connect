@@ -8,6 +8,9 @@ from rest_framework.response import Response
 
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsDoctor, IsPatient
+from apps.ai_intake.serializers import StartIntakeResponseSerializer
+from apps.ai_intake.services.base import AIProviderDisabled
+from apps.ai_intake.services.intake import start_intake_session
 from apps.consultations.models import Consultation, ConsultationStatus
 from apps.consultations.serializers import (
     ConsultationCancelSerializer,
@@ -180,3 +183,41 @@ def cancel_consultation(request: Request, pk: str) -> Response:
 
     output = ConsultationSerializer(consultation)
     return Response(output.data)
+
+
+# ── AI Intake Start ─────────────────────────────────────────────────────────
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsPatient])
+def start_intake(request: Request, pk) -> Response:
+    """Start (or resume) an AI intake session for a consultation.
+
+    Returns 503 when AI intake is disabled.
+    """
+    consultation = get_object_or_404(
+        Consultation,
+        id=pk,
+        patient__user=request.user,
+    )
+
+    try:
+        language = request.data.get("language", "en")
+        session = start_intake_session(consultation, language=str(language))
+    except AIProviderDisabled:
+        return Response(
+            {"detail": "AI-assisted intake is currently unavailable."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    data = StartIntakeResponseSerializer({
+        "session_id": session.id,
+        "session_status": session.status,
+        "current_question": session.current_question or "",
+        "question_count": session.question_count,
+        "emergency_detected": session.emergency_detected,
+        "emergency_level": session.emergency_level,
+        "language": session.language,
+    }).data
+
+    return Response(data, status=status.HTTP_200_OK)

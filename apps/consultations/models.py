@@ -15,6 +15,7 @@ class ConsultationStatus(models.TextChoices):
     FOLLOW_UP_REQUIRED = "follow_up_required", _("Follow-up Required")
     COMPLETED = "completed", _("Completed")
     CANCELLED = "cancelled", _("Cancelled")
+    EMERGENCY_ESCALATED = "emergency_escalated", _("Emergency Escalated")
 
 
 class Priority(models.TextChoices):

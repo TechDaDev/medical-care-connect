@@ -100,8 +100,8 @@ mcc_backend/
 │   ├── specialties/     # Medical specialties
 │   ├── consultations/   # Consultation requests
 │   ├── messaging/       # Placeholder
-│   ├── medical_records/ # Placeholder
-│   ├── ai_intake/       # Placeholder
+│   ├── medical_records/ # Medical record drafts
+│   ├── ai_intake/       # AI-assisted intake (DeepSeek)
 │   ├── notifications/   # Placeholder
 │   └── audit/           # Placeholder
 └── tests/               # Unit & integration tests
@@ -132,6 +132,58 @@ mcc_backend/
 | `GET` | `/api/consultations/<id>/` | Yes | Consultation detail |
 | `POST` | `/api/consultations/<id>/accept/` | Yes (Doctor) | Accept consultation |
 | `POST` | `/api/consultations/<id>/cancel/` | Yes | Cancel consultation (requires reason) |
+| `POST` | `/api/consultations/<id>/intake/start/` | Yes (Patient) | Start AI-assisted medical intake |
+| `POST` | `/api/intake/sessions/<id>/answer/` | Yes (Patient) | Submit answer during intake |
+| `GET` | `/api/intake/sessions/<id>/` | Yes | Retrieve intake session + messages |
+| `GET` | `/api/medical-records/<id>/` | Yes | Retrieve medical record draft |
+| `PATCH` | `/api/medical-records/<id>/` | Yes (Doctor) | Update draft record |
+| `POST` | `/api/medical-records/<id>/confirm/` | Yes (Patient) | Confirm finalized record |
+
+## Phase 4 — AI-Assisted Medical Intake
+
+Phase 4 adds an AI-powered medical intake workflow that collects structured patient information before a consultation. The system uses DeepSeek (OpenAI-compatible) for conversational intake and deterministic keyword screening for emergencies.
+
+### Scope
+
+- **AI does not diagnose.** The system collects patient-reported symptoms and history for the doctor's review.
+- **AI does not prescribe.** No medication or treatment recommendations are generated.
+- **MCC is not an emergency service.** The system includes keyword-based emergency screening. If an emergency is detected, the patient is advised to seek immediate emergency care.
+- **Messaging is not implemented.** The consultation lifecycle and intake are separate from direct patient–doctor messaging (planned for a future phase).
+
+### AI Intake Behavior
+
+| Condition | Response |
+|-----------|----------|
+| AI enabled (default) | Conversational intake via DeepSeek |
+| AI disabled (`AI_INTAKE_ENABLED=false`) | Start returns HTTP 503 |
+| Emergency keywords detected | Session stops, deterministic screen, no AI call |
+
+### Emergency Screening
+
+Before every AI call, the system runs deterministic keyword screening for:
+- Self-harm / suicide
+- Severe chest pain / cardiac
+- Difficulty breathing
+- Severe bleeding
+- Stroke symptoms
+- Anaphylaxis
+
+If triggered, the session enters `emergency_stopped` status and returns an emergency message. No AI call is made.
+
+### DeepSeek Environment Variables
+
+These are managed in `.env`:
+
+```
+DEEPSEEK_API_KEY=           # API key (required if AI enabled)
+DEEPSEEK_BASE_URL=https://api.deepseek.com  # API endpoint
+DEEPSEEK_MODEL=             # Model name (required if AI enabled)
+DEEPSEEK_TIMEOUT_SECONDS=45
+DEEPSEEK_MAX_TOKENS=1200
+DEEPSEEK_TEMPERATURE=0.2
+AI_INTAKE_ENABLED=false     # Master toggle
+AI_INTAKE_PROVIDER=deepseek # Provider selection
+```
 
 ## Tech Stack
 
@@ -144,4 +196,4 @@ mcc_backend/
 
 ## Next Phase
 
-Phase 4 will add AI-assisted intake, messaging between patients and doctors, and medical record management.
+Phase 5 will add messaging between patients and doctors, notifications, and enhanced medical record capabilities.
