@@ -323,3 +323,73 @@ All errors return:
   "fields": {}
 }
 ```
+
+---
+
+## Attachments
+
+All attachment endpoints require authentication and consultation participation
+(patient, assigned doctor, or staff).
+
+### POST /api/attachments/upload/?consultation_id=UUID
+
+**Request:** Multipart form — `file`, `category`, `description` (optional).
+
+**Response 201:**
+```json
+{
+  "id": "uuid",
+  "category": "medical_report",
+  "description": "...",
+  "filename": "report.pdf",
+  "size": 12345,
+  "mime_type": "application/pdf",
+  "sha256": "hex-digest",
+  "status": "available",
+  "scan_status": "not_required",
+  "uploaded_by": {"id": "uuid", "full_name": "..."},
+  "created_at": "2026-01-01T00:00:00Z",
+  "actions": {
+    "can_download": true,
+    "can_delete": true,
+    "can_restore": false
+  }
+}
+```
+
+### GET /api/attachments/?consultation_id=UUID
+
+**Response 200:** Paginated list of attachment objects (same shape as upload
+response, without `sha256`).
+
+### GET /api/attachments/{id}/
+
+**Response 200:** Single attachment object (same shape, no `sha256`).
+
+### GET /api/attachments/{id}/download/
+
+**Response 200:** Binary stream with `Content-Disposition: attachment`.
+
+**Errors:** 403 if user not participant; 404 if deleted; 403 if quarantined.
+
+### DELETE /api/attachments/{id}/
+
+**Response 204:** Soft-deleted.
+
+### POST /api/attachments/{id}/restore/
+
+**Response 200:** Reverses soft-delete. Staff only.
+
+### Category Values
+
+`medical_report`, `laboratory_result`, `medical_image`, `referral`,
+`identity_document`, `consent_document`, `other`
+
+### Attachment Status Values
+
+`pending`, `available`, `quarantined`, `rejected`, `deleted`
+
+### Scan Status Values
+
+`not_required`, `pending`, `clean`, `suspicious`, `infected`, `failed`
+
