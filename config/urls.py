@@ -13,4 +13,5 @@ urlpatterns = [
     path("api/messaging/", include("apps.messaging.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
     path("api/staff/", include("apps.staff.urls")),
+    path("api/", include("apps.attachments.urls")),
 ]

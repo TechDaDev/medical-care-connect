@@ -43,6 +43,7 @@ services:
       SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-true}
     volumes:
       - static_volume:/app/staticfiles
+      - attachment_volume:/app/protected_attachments
 
   frontend:
     build:
@@ -60,3 +61,4 @@ services:
 volumes:
   postgres_data:
   static_volume:
+  attachment_volume:

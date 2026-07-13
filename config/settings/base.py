@@ -49,6 +49,7 @@ LOCAL_APPS = [
     "apps.ai_intake",
     "apps.notifications",
     "apps.audit",
+    "apps.attachments",
     "apps.staff",
 ]
 
@@ -214,6 +215,17 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_SAMESITE": "Lax",
     "AUTH_COOKIE_PATH": "/",
 }
+
+# ── Attachments / Storage ──────────────────────────────────────────────────
+
+ATTACHMENT_STORAGE_BACKEND = env("ATTACHMENT_STORAGE_BACKEND", default="local")
+ATTACHMENT_LOCAL_ROOT = env("ATTACHMENT_LOCAL_ROOT", default=str(BASE_DIR / "protected_attachments"))
+ATTACHMENT_MAX_SIZE_MB = env.int("ATTACHMENT_MAX_SIZE_MB", default=10)
+ATTACHMENT_ALLOWED_EXTENSIONS = env("ATTACHMENT_ALLOWED_EXTENSIONS", default="pdf,jpg,jpeg,png")
+ATTACHMENT_ALLOWED_MIME_TYPES = env("ATTACHMENT_ALLOWED_MIME_TYPES", default="application/pdf,image/jpeg,image/png")
+ATTACHMENT_SCAN_MODE = env("ATTACHMENT_SCAN_MODE", default="disabled")
+ATTACHMENT_RETENTION_DAYS = env.int("ATTACHMENT_RETENTION_DAYS", default=0)
+ATTACHMENT_DOWNLOAD_CHUNK_SIZE = env.int("ATTACHMENT_DOWNLOAD_CHUNK_SIZE", default=65536)
 
 # ── AI-Assisted Intake ──────────────────────────────────────────────────────
 
