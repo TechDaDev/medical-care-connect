@@ -7,6 +7,11 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 from apps.accounts.authentication import CSRFFailure
+from apps.core.security_events import (
+    csrf_failed,
+    permission_denied,
+    throttle_exceeded,
+)
 
 
 def custom_exception_handler(exc, context):
@@ -43,11 +48,37 @@ def custom_exception_handler(exc, context):
             errors["fields"] = response.data
 
         response.data = errors
+
+        # Log security events
+        _log_security_event(exc, request)
     else:
         # Handle non-DRF exceptions gracefully
         response = _handle_unhandled_exception(exc, context)
 
     return response
+
+
+def _log_security_event(exc, request):
+    """Log security events for CSRF, permission, and throttle failures."""
+    if isinstance(exc, CSRFFailure):
+        user_id = str(request.user.id) if request and request.user.is_authenticated else ""
+        path = request.path if request else ""
+        csrf_failed(user_id=user_id, path=path)
+        return
+
+    if isinstance(exc, (exceptions.PermissionDenied, DjangoPermissionDenied)):
+        user_id = str(request.user.id) if request and request.user.is_authenticated else ""
+        role = request.user.role if request and request.user.is_authenticated else ""
+        path = request.path if request else ""
+        permission_denied(user_id=user_id, role=role, path=path)
+        return
+
+    if isinstance(exc, exceptions.Throttled):
+        user_id = str(request.user.id) if request and request.user.is_authenticated else ""
+        path = request.path if request else ""
+        rate = getattr(exc, "wait", None)
+        throttle_exceeded(user_id=user_id, path=path, rate=str(rate) if rate else "")
+        return
 
 
 def _extract_detail(data):

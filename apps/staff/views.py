@@ -12,6 +12,10 @@ from apps.accounts.models import UserRole
 from apps.accounts.permissions import (
     IsCoordinatorOrAdministrator,
 )
+from apps.core.security_events import (
+    consultation_priority_changed,
+    consultation_transferred,
+)
 from apps.consultations.models import (
     Consultation,
     ConsultationPriorityChange,
@@ -246,6 +250,13 @@ def transfer_consultation(request: Request, consultation_id: str) -> Response:
                     consultation=consultation,
                 )
 
+    consultation_transferred(
+        consultation_id=str(consultation.id),
+        from_doctor=str(previous_doctor.id) if previous_doctor else "",
+        to_doctor=str(new_doctor.id),
+        by_user=str(request.user.id),
+    )
+
     return Response({"detail": "Consultation transferred successfully."})
 
 
@@ -291,6 +302,13 @@ def update_priority(request: Request, consultation_id: str) -> Response:
 
     consultation.priority = new_priority
     consultation.save(update_fields=["priority", "updated_at"])
+
+    consultation_priority_changed(
+        consultation_id=str(consultation.id),
+        old=str(previous_priority) if previous_priority else "",
+        new=str(new_priority),
+        by_user=str(request.user.id),
+    )
 
     return Response({
         "detail": "Priority updated.",

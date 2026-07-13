@@ -310,7 +310,7 @@ class ReadinessTests(TestCase):
         resp = client.get("/api/readiness/")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("database", resp.data)
-        self.assertIn("ai_intake", resp.data)
+        self.assertIn("attachment_storage", resp.data)
         self.assertIn("status", resp.data)
         # Should not leak secrets
         content = str(resp.data)

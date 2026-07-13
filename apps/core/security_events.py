@@ -25,7 +25,7 @@ def _safe_event(event: str, **kwargs):
     for k, v in kwargs.items():
         if v is not None:
             safe[k] = v
-    _logger.info(f"security.{event}", event=f"security.{event}", **safe)
+    _logger.info(f"security.{event}", **safe)
 
 
 # ── Auth ──

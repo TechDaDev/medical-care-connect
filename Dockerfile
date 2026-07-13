@@ -17,7 +17,7 @@ RUN groupadd --system --gid 1000 django && \
     useradd --system --gid django --uid 1000 --no-create-home django
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 && \
+    libpq5 postgresql-client && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

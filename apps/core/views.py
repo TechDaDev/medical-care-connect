@@ -112,6 +112,7 @@ def operations_metrics(request):
         pending_notifications = Notification.objects.count()
         retention_count = _get_retention_candidates()
     except Exception:
+        import traceback; traceback.print_exc()
         return Response({"error": "metrics_unavailable"}, status=503)
 
     return Response({

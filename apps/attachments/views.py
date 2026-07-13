@@ -22,6 +22,11 @@ from apps.attachments.serializers import AttachmentListSerializer, AttachmentUpl
 from apps.attachments.services.factory import get_storage_backend
 from apps.attachments.services.scanning import DisabledAttachmentScanner
 from apps.attachments.validators import ALLOWED_EXTENSIONS, AttachmentFileValidator
+from apps.core.security_events import (
+    attachment_deleted,
+    attachment_downloaded,
+    attachment_uploaded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +228,12 @@ def upload_attachment(request, consultation_id):
         "category": category,
         "status": attachment.status,
     })
+    attachment_uploaded(
+        str(attachment.id),
+        str(attachment.consultation_id),
+        str(request.user.id),
+        attachment.category,
+    )
 
     data = AttachmentListSerializer(attachment, context={"request": request}).data
     return Response(data, status=status.HTTP_201_CREATED)
@@ -332,6 +343,11 @@ def download_attachment(request, attachment_id):
     _audit(attachment, request.user, AttachmentEventType.DOWNLOADED, {
         "size": attachment.size_bytes,
     })
+    attachment_downloaded(
+        str(attachment.id),
+        str(attachment.consultation_id),
+        str(request.user.id),
+    )
 
     return response
 
@@ -400,6 +416,11 @@ def delete_attachment(request, attachment_id):
     _audit(attachment, user, AttachmentEventType.DELETED, {
         "reason": attachment.deletion_reason or "user_request",
     })
+    attachment_deleted(
+        str(attachment.id),
+        str(attachment.consultation_id),
+        str(request.user.id),
+    )
 
     # Delete physical object for local development
     if settings.ATTACHMENT_STORAGE_BACKEND == "local":

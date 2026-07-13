@@ -35,7 +35,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         execute = options["execute"]
-        output_dir = Path(options["output-dir"] or getattr(settings, "BACKUP_ROOT", ""))
+        output_dir = Path(options["output_dir"] or getattr(settings, "BACKUP_ROOT", ""))
         retain = options["retain"] or getattr(settings, "BACKUP_RETENTION_COUNT", 7)
 
         # Refuse SQLite

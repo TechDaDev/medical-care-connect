@@ -1,6 +1,14 @@
-"""Test settings — raises throttle rates so the cache never blocks tests."""
+"""Test settings — raises throttle rates and uses SQLite for CI/offline."""
 
 from .development import *  # noqa: F403, F401
+
+# Use SQLite so tests run without PostgreSQL
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+    },
+}
 
 # Generous throttle rates prevent cross-test cache interactions
 REST_FRAMEWORK = {**REST_FRAMEWORK}  # noqa: F405

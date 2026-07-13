@@ -16,6 +16,12 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 
+from apps.core.security_events import (
+    auth_login_failed,
+    auth_login_success,
+    auth_logout,
+)
+
 from apps.accounts.serializers import (
     CurrentUserSerializer,
     LoginSerializer,
@@ -122,14 +128,21 @@ class LoginView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except exceptions.ValidationError:
+            email = request.data.get("email", "")
+            auth_login_failed(email, "invalid_credentials")
             return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
         except Exception:
+            email = request.data.get("email", "")
+            auth_login_failed(email, "invalid_credentials")
             return Response(
                 {"detail": "Unable to log in with provided credentials."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
         tokens = getattr(serializer, "tokens", None)
+        user = serializer.user
+        auth_login_success(str(user.id), user.role)
+
         response_data = {"user": serializer.validated_data.get("user", {})}
         response = Response(response_data, status=status.HTTP_200_OK)
 
@@ -182,6 +195,8 @@ def logout_view(request: Request) -> Response:
             token.blacklist()
         except (TokenError, InvalidToken):
             pass  # Invalid/expired — still clear cookies
+
+    auth_logout(str(request.user.id))
 
     response = Response({"detail": "Successfully logged out."})
     clear_auth_cookies(response)
