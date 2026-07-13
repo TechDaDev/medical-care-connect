@@ -28,14 +28,17 @@ class LocalProtectedStorageBackend(AttachmentStorageBackend):
         self._root.mkdir(parents=True, exist_ok=True)
 
     def _full_path(self, storage_key: str) -> Path:
-        # Prefix first two chars to avoid flat directory
-        prefix = storage_key[:2] if len(storage_key) > 1 else "xx"
-        directory = self._root / prefix
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory / storage_key
+        # Prefix first two chars of the key (before any slash) to avoid flat directory
+        key_part = storage_key.split("/")[0]
+        prefix = key_part[:2] if len(key_part) > 1 else "xx"
+        return self._root / prefix / storage_key
+
+    def _ensure_parent(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
 
     def save(self, file: BinaryIO, storage_key: str) -> StoredObject:
         path = self._full_path(storage_key)
+        self._ensure_parent(path)
         written = 0
         with open(path, "wb") as dst:
             while True:

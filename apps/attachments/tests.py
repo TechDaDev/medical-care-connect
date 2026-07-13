@@ -61,9 +61,11 @@ class AttachmentUploadTests(TestCase):
 
     def setUp(self):
         from django.conf import settings as s
-        s.ATTACHMENT_LOCAL_ROOT = tempfile.mkdtemp()
+        import os
+        tmp = tempfile.mkdtemp()
+        os.makedirs(tmp, exist_ok=True)
+        s.ATTACHMENT_LOCAL_ROOT = tmp
         clear_backend_cache()
-        self.client = APIClient()
         self.client = APIClient()
         self.patient_user = _create_user("patient@test.com", UserRole.PATIENT)
         self.doctor_user = _create_user("doctor@test.com", UserRole.DOCTOR)
@@ -147,7 +149,10 @@ class AttachmentDownloadTests(TestCase):
 
     def setUp(self):
         from django.conf import settings as s
-        s.ATTACHMENT_LOCAL_ROOT = tempfile.mkdtemp()
+        import os
+        tmp = tempfile.mkdtemp()
+        os.makedirs(tmp, exist_ok=True)
+        s.ATTACHMENT_LOCAL_ROOT = tmp
         clear_backend_cache()
         self.client = APIClient()
         self.patient_user = _create_user("patient@test.com", UserRole.PATIENT)
@@ -207,7 +212,10 @@ class AttachmentDeleteTests(TestCase):
 
     def setUp(self):
         from django.conf import settings as s
-        s.ATTACHMENT_LOCAL_ROOT = tempfile.mkdtemp()
+        import os
+        tmp = tempfile.mkdtemp()
+        os.makedirs(tmp, exist_ok=True)
+        s.ATTACHMENT_LOCAL_ROOT = tmp
         clear_backend_cache()
         self.client = APIClient()
         self.patient_user = _create_user("patient@test.com", UserRole.PATIENT)
@@ -277,5 +285,5 @@ class PurgeCommandTests(TestCase):
         self.attachment.status = AttachmentStatus.AVAILABLE
         self.attachment.save()
         from django.core.management import call_command
-        call_command("purge_expired_attachments", dry_run=True)
+        call_command("purge_expired_attachments")
         self.assertTrue(ConsultationAttachment.objects.filter(pk=self.attachment.pk).exists())
