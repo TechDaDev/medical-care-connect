@@ -22,14 +22,14 @@ class Command(BaseCommand):
         parser.add_argument("--backup-dir", default="", help="Backup root directory.")
 
     def handle(self, *args, **options):
-        backup_dir = Path(options["backup-dir"] or getattr(settings, "BACKUP_ROOT", ""))
-        if not backup_dir.exists():
-            raise CommandError(f"Backup directory not found: {backup_dir}")
-
-        manifest_path = options["manifest"]
+        manifest_path = options.get("manifest", "")
         if manifest_path:
             manifests = [Path(manifest_path)]
         else:
+            backup_dir_str = options.get("backup-dir") or options.get("backup_dir") or getattr(settings, "BACKUP_ROOT", "")
+            backup_dir = Path(backup_dir_str) if backup_dir_str else Path(settings.BACKUP_ROOT)
+            if not backup_dir.exists():
+                raise CommandError(f"Backup directory not found: {backup_dir}")
             manifests = sorted(backup_dir.glob("*.manifest.json"))
             # Also check attachment manifests
             att_dir = backup_dir / "attachments"

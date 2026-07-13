@@ -105,8 +105,8 @@ def operations_metrics(request):
             attachments_by_status[s] = ConsultationAttachment.objects.filter(status=s).count()
 
         total_bytes = sum(
-            ConsultationAttachment.objects.exclude(size__isnull=True)
-            .values_list("size", flat=True)
+            ConsultationAttachment.objects.exclude(size_bytes__isnull=True)
+            .values_list("size_bytes", flat=True)
         )
         total_users = User.objects.count()
         pending_notifications = Notification.objects.count()
