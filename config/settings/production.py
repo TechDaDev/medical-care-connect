@@ -48,28 +48,37 @@ SIMPLE_JWT["AUTH_COOKIE_SECURE"] = env.bool("AUTH_COOKIE_SECURE", default=True) 
 # ── Database ────────────────────────────────────────────────────────────────
 
 _prod_env = environ.Env()
-_postgres_db = _prod_env("POSTGRES_DB", default=None)
+_database_url = _prod_env("DATABASE_URL", default=None)
 
-if not _postgres_db:
-    raise ImproperlyConfigured(
-        "Production requires POSTGRES_DB environment variable. "
-        "Set POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, "
-        "POSTGRES_HOST, and POSTGRES_PORT in .env or environment."
-    )
+if _database_url:
+    import dj_database_url
+    DATABASES = {
+        "default": dj_database_url.parse(
+            _database_url,
+            conn_max_age=env.int("CONN_MAX_AGE", default=0),
+            ssl_require=env.bool("DATABASE_SSL_REQUIRE", default=False),
+        )
+    }
+else:
+    _postgres_db = _prod_env("POSTGRES_DB", default=None)
+    if not _postgres_db:
+        raise ImproperlyConfigured(
+            "Production requires DATABASE_URL or POSTGRES_DB. "
+        )
 
-_db_options = {"connect_timeout": 10}
-if env.bool("DATABASE_SSL_REQUIRE", default=False):
-    _db_options["sslmode"] = "require"
+    _db_options = {"connect_timeout": 10}
+    if env.bool("DATABASE_SSL_REQUIRE", default=False):
+        _db_options["sslmode"] = "require"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": _postgres_db,
-        "USER": _prod_env("POSTGRES_USER"),
-        "PASSWORD": _prod_env("POSTGRES_PASSWORD"),
-        "HOST": _prod_env("POSTGRES_HOST", default="localhost"),
-        "PORT": _prod_env("POSTGRES_PORT", default="5432"),
-        "OPTIONS": _db_options,
-        "CONN_MAX_AGE": env.int("CONN_MAX_AGE", default=0),
-    },
-}
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _postgres_db,
+            "USER": _prod_env("POSTGRES_USER"),
+            "PASSWORD": _prod_env("POSTGRES_PASSWORD"),
+            "HOST": _prod_env("POSTGRES_HOST", default="localhost"),
+            "PORT": _prod_env("POSTGRES_PORT", default="5432"),
+            "OPTIONS": _db_options,
+            "CONN_MAX_AGE": env.int("CONN_MAX_AGE", default=0),
+        },
+    }

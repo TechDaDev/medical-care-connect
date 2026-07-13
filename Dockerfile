@@ -36,7 +36,7 @@ EXPOSE 8000
 
 USER django
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python manage.py check --deploy --settings=config.settings.production || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-8000}/api/health/'); exit(0)" 2>/dev/null || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
