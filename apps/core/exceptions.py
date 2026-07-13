@@ -12,11 +12,14 @@ from apps.accounts.authentication import CSRFFailure
 def custom_exception_handler(exc, context):
     """DRF exception handler that normalizes error responses.
 
+    Includes request_id for correlation when available.
+
     Returns:
         {
             "detail": "Human-readable message",
             "code": "error_code",
-            "fields": { ... }   # validation errors per field (optional)
+            "fields": { ... },   # validation errors per field (optional)
+            "request_id": "uuid"  # correlation ID (optional)
         }
     """
     response = exception_handler(exc, context)
@@ -28,6 +31,11 @@ def custom_exception_handler(exc, context):
             "code": _get_code(exc),
         }
 
+        # Attach request_id from request if available
+        request = context.get("request") if isinstance(context, dict) else None
+        if request and hasattr(request, "request_id"):
+            errors["request_id"] = request.request_id
+
         # Preserve DRF field-level validation errors
         if isinstance(response.data, dict) and any(
             isinstance(v, (list, dict)) for v in response.data.values()
@@ -37,7 +45,7 @@ def custom_exception_handler(exc, context):
         response.data = errors
     else:
         # Handle non-DRF exceptions gracefully
-        response = _handle_unhandled_exception(exc)
+        response = _handle_unhandled_exception(exc, context)
 
     return response
 
@@ -90,14 +98,22 @@ def _get_code(exc):
     return "internal_error"
 
 
-def _handle_unhandled_exception(exc):
+def _handle_unhandled_exception(exc, context=None):
     """Handle unhandled exceptions without exposing internals."""
+    request_id = ""
+    if context and isinstance(context, dict):
+        request = context.get("request")
+        if request and hasattr(request, "request_id"):
+            request_id = request.request_id
+    body = {"detail": "Unable to complete the request.", "code": "internal_error"}
+    if request_id:
+        body["request_id"] = request_id
     if isinstance(exc, Http404):
         return Response(
             {"detail": "Not found.", "code": "not_found"},
             status=status.HTTP_404_NOT_FOUND,
         )
     return Response(
-        {"detail": "An unexpected error occurred.", "code": "internal_error"},
+        body,
         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )

@@ -46,3 +46,33 @@ Legacy `Authorization: Bearer <token>` still supported for migration.
 | Default user | 1000/hour |
 
 Rates configurable via env vars (see `.env.example`).
+
+---
+
+## Phase 8C: Request ID in Error Responses
+
+All API error responses now include a `request_id` field for correlation with
+server-side logs.
+
+**Example error response:**
+```json
+{
+  "detail": "Authentication credentials were not provided.",
+  "code": "not_authenticated",
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+The `request_id` is:
+- A UUID v4, generated per request
+- Reused from `X-Request-ID` header if provided as valid UUID
+- Returned in `X-Request-ID` response header
+- Included in every structured log line for the request
+
+This applies to all error codes: `validation_error`, `csrf_failed`,
+`authentication_failed`, `not_authenticated`, `permission_denied`,
+`not_found`, `method_not_allowed`, `throttled`, `conflict`, `api_error`,
+`internal_error`.
+
+The `request_id` is available in the frontend via the `X-Request-ID`
+response header and inside error response JSON for debugging.

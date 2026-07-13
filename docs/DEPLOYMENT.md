@@ -86,3 +86,62 @@ docker compose exec db psql -U mcc_user -d mcc_production -f /backups/rollback.s
 - No SQLite in production
 - Static files served via WhiteNoise (Django)
 - Gunicorn with 4 sync workers (configurable)
+
+---
+
+## Phase 8C: Observability & Operations Variables
+
+### Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `INFO` | Log level |
+| `LOG_FORMAT` | `json` | `json` or `simple` |
+| `LOG_SERVICE_NAME` | `mcc-backend` | Service identifier |
+| `LOG_INCLUDE_REQUESTS` | `true` | Enable request logging |
+| `LOG_SLOW_REQUEST_MS` | `1000` | Slow request threshold |
+| `LOG_IP_HASH_SALT` | `""` | Salt for IP hashing (required in production) |
+
+### Error Monitoring
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ERROR_MONITOR_PROVIDER` | `disabled` | `disabled` or `sentry` |
+| `ERROR_MONITOR_DSN` | `""` | Sentry DSN |
+| `ERROR_MONITOR_ENVIRONMENT` | `""` | Environment tag |
+| `ERROR_MONITOR_RELEASE` | `""` | Release version |
+
+### Backup
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKUP_ROOT` | `backups/` | Backup output directory |
+| `BACKUP_RETENTION_COUNT` | `7` | Number of backups to keep |
+
+### Data Export
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATA_EXPORT_ROOT` | `exports/` | Export output directory |
+| `DATA_EXPORT_EXPIRY_DAYS` | `7` | Export download expiry |
+
+### Application Version
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_VERSION` | `0.0.0` | Semantic version |
+| `APP_RELEASE` | `""` | Release name |
+| `GIT_COMMIT_SHA` | `""` | Git commit hash |
+
+### Health / Readiness Paths
+
+| Path | Purpose |
+|------|---------|
+| `GET /api/health/` | Process alive (no DB) |
+| `GET /api/readiness/` | DB + storage check |
+
+Operations (admin-only):
+| Path | Purpose |
+|------|---------|
+| `GET /api/staff/operations/status/` | Detailed operational state |
+| `GET /api/staff/operations/metrics/` | Aggregated counts |

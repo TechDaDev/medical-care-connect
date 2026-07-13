@@ -45,3 +45,36 @@ loads the attachment UI inside consultation detail pages.
 | `ATTACHMENT_SCAN_MODE` | `disabled` | Set to `clamav` for real scanning |
 | `ATTACHMENT_RETENTION_DAYS` | 90 | Deleted files purged after this |
 | `ATTACHMENT_PURGE_BATCH_SIZE` | 500 | Rows per purge cycle |
+
+---
+
+## Phase 8C: Backup & Storage Operations
+
+### Backup Commands
+
+| Command | Purpose |
+|---------|---------|
+| `backup_attachments` | Copies files to staging directory with checksums |
+| `verify_backup` | Validates backup manifests and checksums |
+| `restore_backup` | Verification only — does not auto-restore |
+
+All commands are **dry-run by default** (`--execute` required).
+
+See [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md) for full documentation.
+
+### Storage Migration Skeleton
+
+The storage backend uses a provider-neutral ABC (`services/base.py`) with
+current implementation `LocalProtectedStorageBackend`. To migrate to a
+different backend (e.g., S3, Railway Bucket):
+
+1. Create new backend class inheriting from `StorageBackend`
+2. Set `ATTACHMENT_STORAGE_BACKEND` to new backend name
+3. Run `backup_attachments --execute` to snapshot current files
+4. Run `verify_backup` to confirm integrity
+5. Deploy new backend config
+6. Restore files from backup to new backend
+7. Verify checksums match
+
+Backup commands work with any storage backend — they use the configured
+backend via `get_storage_backend()`, not direct filesystem access.

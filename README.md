@@ -194,6 +194,43 @@ AI_INTAKE_ENABLED=false     # Master toggle
 AI_INTAKE_PROVIDER=deepseek # Provider selection
 ```
 
+## Phase 8C — Observability, Privacy & Operations
+
+Phase 8C adds production-grade observability, privacy workflows, backup/
+restore tooling, and operational endpoints.
+
+### Features
+
+- **Structured JSON logging** — every request logged with correlation ID,
+  safe fields only, no PII in logs
+- **Request correlation IDs** — `X-Request-ID` header on every response,
+  included in error payloads
+- **Security event logging** — 18+ typed security events (auth, CSRF,
+  attachments, consultations, accounts, data exports)
+- **Error monitoring interface** — `ErrorMonitor` ABC with disabled default,
+  Sentry reserved
+- **IP hashing** — one-way salted SHA-256, configured via `LOG_IP_HASH_SALT`
+- **Backup commands** — `backup_database` (pg_dump), `backup_attachments`,
+  `verify_backup`, `restore_backup` (verification only), `prune_backups`
+- **Disaster recovery test procedure** — documented temp-DB-based DR test
+- **Data export** — `DataExportRequest` model with full lifecycle
+  (request → process → download → expire)
+- **Account deactivation/reactivation** — user self-service, admin override
+- **Account deletion requests** — `AccountDeletionRequest` with staff review
+  (approve/reject)
+- **Anonymizer** — `PreviewOnlyAnonymizer` reports affected records without
+  mutation
+- **Operations endpoints** — `/api/health/`, `/api/readiness/`,
+  `/api/staff/operations/status/`, `/api/staff/operations/metrics/`
+- **Runbooks** — 9 runbooks covering backup, restore, outage, deployment
+  failure, auth incidents, storage corruption, secret rotation, and account
+  deletion review
+- **Privacy documentation** — export contents, exclusions, retention policy,
+  legal blocks
+- **Railway deployment guide** — env vars, health checks, cookie config,
+  Railway Bucket future work
+- **CI/CD documentation** — backend-ci, e2e-ci, security-ci workflows
+
 ## Tech Stack
 
 - **Python 3.12+**

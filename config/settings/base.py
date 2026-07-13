@@ -51,6 +51,7 @@ LOCAL_APPS = [
     "apps.audit",
     "apps.attachments",
     "apps.staff",
+    "apps.privacy",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -65,6 +66,21 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.core.middleware.RequestIDMiddleware",
+    "apps.core.logging.RequestLoggingMiddleware",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "x-csrftoken",
+    "x-request-id",
+    "x-requested-with",
+]
+
+CORS_EXPOSE_HEADERS = [
+    "x-request-id",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -238,3 +254,62 @@ DEEPSEEK_MODEL = env("DEEPSEEK_MODEL", default=None)
 DEEPSEEK_TIMEOUT_SECONDS = env.int("DEEPSEEK_TIMEOUT_SECONDS", default=45)
 DEEPSEEK_MAX_TOKENS = env.int("DEEPSEEK_MAX_TOKENS", default=1200)
 DEEPSEEK_TEMPERATURE = env.float("DEEPSEEK_TEMPERATURE", default=0.2)
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+
+LOG_LEVEL = env("LOG_LEVEL", default="INFO")
+LOG_FORMAT = env("LOG_FORMAT", default="json")
+LOG_SERVICE_NAME = env("LOG_SERVICE_NAME", default="mcc-backend")
+LOG_INCLUDE_REQUESTS = env("LOG_INCLUDE_REQUESTS", default="true")
+LOG_SLOW_REQUEST_MS = env.int("LOG_SLOW_REQUEST_MS", default=1000)
+LOG_IP_HASH_SALT = env("LOG_IP_HASH_SALT", default="")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {"()": "apps.core.logging.JSONFormatter"},
+        "simple": {"format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json" if LOG_FORMAT == "json" else "simple",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "mcc": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "mcc.request": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "mcc.security": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "mcc.monitor": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "django": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "django.request": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+}
+
+# ── Error Monitoring ────────────────────────────────────────────────────────
+
+ERROR_MONITOR_PROVIDER = env("ERROR_MONITOR_PROVIDER", default="disabled")
+ERROR_MONITOR_DSN = env("ERROR_MONITOR_DSN", default="")
+ERROR_MONITOR_ENVIRONMENT = env("ERROR_MONITOR_ENVIRONMENT", default="")
+ERROR_MONITOR_RELEASE = env("ERROR_MONITOR_RELEASE", default="")
+
+# ── Backup / Operations ─────────────────────────────────────────────────────
+
+BACKUP_ROOT = env("BACKUP_ROOT", default=str(BASE_DIR / "backups"))
+BACKUP_RETENTION_COUNT = env.int("BACKUP_RETENTION_COUNT", default=7)
+BACKUP_REQUIRE_ENCRYPTION = env.bool("BACKUP_REQUIRE_ENCRYPTION", default=False)
+BACKUP_ENCRYPTION_PROVIDER = env("BACKUP_ENCRYPTION_PROVIDER", default="disabled")
+
+# ── Privacy / Data Export ───────────────────────────────────────────────────
+
+DATA_EXPORT_ROOT = env("DATA_EXPORT_ROOT", default=str(BASE_DIR / "exports"))
+DATA_EXPORT_EXPIRY_DAYS = env.int("DATA_EXPORT_EXPIRY_DAYS", default=7)
+
+# ── Application Version ─────────────────────────────────────────────────────
+
+APP_VERSION = env("APP_VERSION", default="0.0.0")
+APP_RELEASE = env("APP_RELEASE", default="")
+GIT_COMMIT_SHA = env("GIT_COMMIT_SHA", default="")

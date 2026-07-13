@@ -48,3 +48,33 @@ Recommended: run nightly via cron or Django-Q.
 ```cron
 0 3 * * * /path/to/venv/bin/python /path/to/manage.py purge_expired_attachments --execute
 ```
+
+---
+
+## Phase 8C: Data Export Retention
+
+Data export files have their own retention lifecycle independent of
+attachment purging:
+
+| Stage | Duration | Behavior |
+|-------|----------|----------|
+| Active | 7 days (`DATA_EXPORT_EXPIRY_DAYS`) | User can download |
+| Expired | Indefinite | Cannot download, status `expired` |
+| Deleted | Permanent | User/ admin marks as `deleted` |
+
+Exports are stored in `DATA_EXPORT_ROOT` (default `exports/`).
+
+## Account Deletion Retention
+
+When an account deletion request is processed, the following data is retained
+per legal requirements and cannot be permanently deleted:
+
+| Data Type | Retention Reason |
+|-----------|-----------------|
+| Medical records | Medical/legal compliance |
+| Consultation records | Care continuity |
+| Audit events | Operations auditing |
+| Messages | Care continuity |
+
+The anonymizer reports these as `blocked_by_retention`. See
+[PRIVACY_WORKFLOWS.md](PRIVACY_WORKFLOWS.md) for full details.
