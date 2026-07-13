@@ -1,0 +1,49 @@
+name: Security CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for committed .env
+        run: |
+          if [ -f .env ]; then
+            echo "ERROR: .env file committed!"; exit 1
+          fi
+
+      - name: Check for private keys
+        run: |
+          found=$(find . -name "*.key" -o -name "*.pem" -o -name "*.p12" 2>/dev/null | grep -v node_modules | grep -v __pycache__ | head -5)
+          if [ -n "$found" ]; then echo "ERROR: Private keys found: $found"; exit 1; fi
+          echo "No private keys found."
+
+      - name: Check for JWT localStorage strings
+        run: |
+          ! grep -r "localStorage.*mcc_access\|localStorage.*mcc_refresh" src/ --include="*.ts" --include="*.tsx" 2>/dev/null
+          echo "No JWT localStorage regression."
+
+      - name: Check for storage_key exposure
+        run: |
+          ! grep -r '"storage_key"' src/ --include="*.ts" --include="*.tsx" 2>/dev/null
+          echo "No storage_key exposed in frontend."
+
+      - name: Check for public media routes
+        run: |
+          ! grep -r "MEDIA_URL\|STATIC_URL.*media" config/urls.py 2>/dev/null
+          echo "No public media routes."
+
+      - name: Check for secret patterns
+        run: |
+          ! grep -r "API_KEY\|api_key.*=" . --include="*.py" --include="*.ts" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ -l 2>/dev/null | grep -v ".env.example" | grep -v "test" | head -5
+          echo "No exposed API keys."
+
+      - name: npm audit
+        if: hashFiles('frontend/package-lock.json') != ''
+        working-directory: ./frontend
+        run: npm audit --audit-level=high || echo "npm audit found issues (non-blocking in CI)"

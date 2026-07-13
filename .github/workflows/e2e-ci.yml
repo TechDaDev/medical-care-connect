@@ -1,0 +1,134 @@
+name: E2E CI
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "e2e/**"
+      - "package.json"
+      - "docker-compose*.yml"
+  push:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mcc_e2e
+          POSTGRES_USER: mcc_e2e
+          POSTGRES_PASSWORD: mcc_e2e_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python deps
+        working-directory: ./backend
+        run: pip install -r requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ./frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run backend migrations
+        working-directory: ./backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.development
+          SECRET_KEY: e2e-test-key
+          DEBUG: "True"
+          ALLOWED_HOSTS: "*"
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          POSTGRES_DB: mcc_e2e
+          POSTGRES_USER: mcc_e2e
+          POSTGRES_PASSWORD: mcc_e2e_pass
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+        run: python manage.py migrate
+
+      - name: Seed test data
+        working-directory: ./backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.development
+          SECRET_KEY: e2e-test-key
+          DEBUG: "True"
+          ALLOWED_HOSTS: "*"
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          POSTGRES_DB: mcc_e2e
+          POSTGRES_USER: mcc_e2e
+          POSTGRES_PASSWORD: mcc_e2e_pass
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+        run: python manage.py seed_data  # assumed seed command
+
+      - name: Start backend
+        working-directory: ./backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.development
+          SECRET_KEY: e2e-test-key
+          DEBUG: "True"
+          ALLOWED_HOSTS: "*"
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          POSTGRES_DB: mcc_e2e
+          POSTGRES_USER: mcc_e2e
+          POSTGRES_PASSWORD: mcc_e2e_pass
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+        run: |
+          python manage.py runserver 0.0.0.0:8000 &
+          sleep 3
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+
+      - name: Start frontend preview
+        working-directory: ./frontend
+        run: |
+          npx vite preview --port 5173 &
+          sleep 2
+
+      - name: Install Playwright
+        working-directory: ./frontend
+        run: npx playwright install chromium
+
+      - name: Run E2E tests
+        working-directory: ./frontend
+        env:
+          E2E_BASE_URL: http://localhost:5173
+          E2E_PATIENT_EMAIL: patient@mcc.dev
+          E2E_PATIENT_PASSWORD: testpass123
+          E2E_DOCTOR_EMAIL: doctor@mcc.dev
+          E2E_DOCTOR_PASSWORD: testpass123
+          E2E_COORDINATOR_EMAIL: coordinator@mcc.dev
+          E2E_COORDINATOR_PASSWORD: testpass123
+        run: npx playwright test
+
+      - name: Upload E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
