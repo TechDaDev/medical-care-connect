@@ -149,7 +149,6 @@ class Command(BaseCommand):
             users_to_delete.append(doctor_user)
             doc_profile = DoctorProfile.objects.create(
                 user=doctor_user,
-                specialty_name="Verification",
                 is_approved=True,
                 is_accepting_consultations=True,
                 consultation_fee="0",
