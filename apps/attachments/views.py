@@ -20,7 +20,11 @@ from apps.attachments.models import AttachmentAuditEvent, ConsultationAttachment
 from apps.attachments.permissions import IsDoctor, IsPatient, IsStaff
 from apps.attachments.serializers import AttachmentListSerializer, AttachmentUploadSerializer
 from apps.attachments.services.factory import get_storage_backend
-from apps.attachments.services.scanning import DisabledAttachmentScanner
+from apps.attachments.services.scanning import (
+    ClamavAttachmentScanner,
+    DisabledAttachmentScanner,
+    ScanVerdict,
+)
 from apps.attachments.validators import ALLOWED_EXTENSIONS, AttachmentFileValidator
 from apps.core.security_events import (
     attachment_deleted,
@@ -202,10 +206,10 @@ def upload_attachment(request, consultation_id):
         )
 
     # Scan
-    if settings.ATTACHMENT_SCAN_MODE == "disabled":
-        scanner = DisabledAttachmentScanner()
+    scan_mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
+    if scan_mode == "clamav":
+        scanner = ClamavAttachmentScanner()
     else:
-        logger.warning("No scanner configured; marking available.")
         scanner = DisabledAttachmentScanner()
 
     try:
@@ -215,12 +219,27 @@ def upload_attachment(request, consultation_id):
         if scan_result.reference:
             attachment.scan_reference = scan_result.reference
         attachment.scan_completed_at = timezone.now()
+
+        # Fail-closed on scan failure in clamav mode
+        if scan_mode == "clamav" and scan_result.verdict == ScanVerdict.FAILED:
+            attachment.status = AttachmentStatus.QUARANTINED
+        elif scan_result.verdict == ScanVerdict.INFECTED:
+            attachment.status = AttachmentStatus.QUARANTINED
+            attachment.is_deleted = True
+            attachment.deleted_at = timezone.now()
+            # Delete from storage
+            try:
+                backend.delete(storage_key)
+            except Exception:
+                pass
     except Exception as exc:
         logger.error("Scan failed for attachment %s: %s", attachment.id, exc)
         attachment.scan_status = ScanStatus.FAILED
-        attachment.status = AttachmentStatus.QUARANTINED
+        if scan_mode == "clamav":
+            attachment.status = AttachmentStatus.QUARANTINED
     attachment.save(update_fields=[
         "scan_status", "scan_provider", "scan_reference", "scan_completed_at", "status",
+        "is_deleted", "deleted_at",
     ])
 
     _audit(attachment, user, AttachmentEventType.UPLOADED, {
@@ -319,6 +338,26 @@ def download_attachment(request, attachment_id):
             {"detail": "Attachment is not available.", "code": code},
             status=status.HTTP_410_GONE,
         )
+
+    # Enforce scan status
+    scan_mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
+    if scan_mode == "clamav":
+        if attachment.scan_status != ScanStatus.CLEAN:
+            logger.warning(
+                "Blocked download of attachment %s with scan_status=%s",
+                attachment.id, attachment.scan_status,
+            )
+            code_map = {
+                ScanStatus.PENDING: "attachment_scan_pending",
+                ScanStatus.INFECTED: "attachment_quarantined",
+                ScanStatus.FAILED: "attachment_scan_failed",
+                ScanStatus.SUSPICIOUS: "attachment_quarantined",
+            }
+            return Response(
+                {"detail": "Attachment is not available for download.",
+                 "code": code_map.get(attachment.scan_status, "attachment_not_available")},
+                status=status.HTTP_423_LOCKED,
+            )
 
     backend = get_storage_backend()
     file_obj = backend.open(attachment.storage_key)

@@ -43,10 +43,12 @@ def readiness(request):
     storage_ok = _check_attachment_storage()
     if not db_ok:
         return Response({"status": "unhealthy", "database": False}, status=503)
+    scanner_ok = _check_scanner()
     return Response({
         "status": "ready",
         "database": db_ok,
         "attachment_storage": storage_ok,
+        "scanner_available": scanner_ok,
     })
 
 
@@ -122,6 +124,8 @@ def operations_metrics(request):
         "attachments": {"by_status": attachments_by_status, "total_bytes": total_bytes},
         "notifications_pending": pending_notifications,
         "retention_candidates": retention_count,
+        "backup": _backup_status(),
+        "scanner": _scanner_status(),
     })
 
 
@@ -163,6 +167,65 @@ def _get_retention_candidates() -> int:
     return ConsultationAttachment.objects.filter(
         deleted_at__isnull=False, deleted_at__lt=cutoff
     ).count()
+
+
+def _check_scanner() -> bool:
+    """Check if the configured scanner is reachable."""
+    try:
+        from apps.attachments.services.scanning.factory import get_scanner, clear_scanner_cache
+        clear_scanner_cache()
+        scanner = get_scanner()
+        return scanner.is_available()
+    except Exception:
+        return False
+
+
+def _backup_status() -> dict:
+    """Return backup-relevant operational state.  No secrets."""
+    from apps.attachments.services.factory import get_storage_backend, clear_backend_cache
+    storage_ok = False
+    try:
+        clear_backend_cache()
+        backend = get_storage_backend()
+        backend_path = getattr(backend, "_root", None)
+        if backend_path is not None:
+            storage_ok = backend_path.exists()
+        else:
+            check = getattr(backend, "check_access", None)
+            if check is not None:
+                storage_ok = check()
+    except Exception:
+        pass
+
+    MAX_AGE = getattr(settings, "BACKUP_MAX_AGE_HOURS", 30)
+    return {
+        "storage_available": storage_ok,
+        "max_age_hours": MAX_AGE,
+        "degraded": False,  # Set externally via cron result
+    }
+
+
+def _scanner_status() -> dict:
+    """Return scanner-relevant operational state.  No secrets."""
+    mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
+    available = _check_scanner()
+    return {
+        "mode": mode,
+        "available": available,
+    }
+
+
+def _degraded(db_ok: bool, storage_ok: bool) -> list:
+    degraded = []
+    if not db_ok:
+        degraded.append("database")
+    if not storage_ok:
+        degraded.append("attachment_storage")
+    if not _check_scanner():
+        mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
+        if mode == "clamav":
+            degraded.append("scanner")
+    return degraded
 
 
 def _get_latest_migration() -> str:

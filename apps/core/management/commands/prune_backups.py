@@ -1,14 +1,16 @@
 """
-Backup pruning command.
+Backup pruning command — local files and remote storage objects.
 
 Usage:
-  python manage.py prune_backups                # dry-run
-  python manage.py prune_backups --execute       # prune
+  python manage.py prune_backups                              # dry-run (local)
+  python manage.py prune_backups --execute                     # prune (local)
+  python manage.py prune_backups --execute --confirm-environment production
   python manage.py prune_backups --retain 14
   python manage.py prune_backups --retain-days 30
 """
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -23,13 +25,40 @@ class Command(BaseCommand):
         parser.add_argument("--execute", action="store_true", default=False)
         parser.add_argument("--retain", type=int, default=0)
         parser.add_argument("--retain-days", type=int, default=0)
-        parser.add_argument("--backup-dir", default="")
+        parser.add_argument("--backup-dir", dest="backup_dir", default="")
+        parser.add_argument(
+            "--confirm-environment",
+            default="",
+            help="Must match RAILWAY_ENVIRONMENT_NAME to proceed (safety gate).",
+        )
 
     def handle(self, *args, **options):
         execute = options["execute"]
         retain = options["retain"] or getattr(settings, "BACKUP_RETENTION_COUNT", 7)
         retain_days = options["retain_days"] or 0
-        backup_dir = Path(options["backup-dir"] or getattr(settings, "BACKUP_ROOT", ""))
+        backup_dir = Path(options.get("backup_dir") or getattr(settings, "BACKUP_ROOT", ""))
+
+        confirm_env = options.get("confirm_environment", "")
+        env = os.environ.get("RAILWAY_ENVIRONMENT_NAME", "development")
+        if confirm_env and confirm_env != env:
+            raise CommandError(
+                f"--confirm-environment={confirm_env} does not match "
+                f"current environment '{env}'. Aborting."
+            )
+
+        # Safety: refuse deletion when BACKUP_DELETE_ENABLED is False
+        delete_enabled = getattr(settings, "BACKUP_DELETE_ENABLED", False)
+        min_copies = getattr(settings, "BACKUP_MINIMUM_COPIES", 3)
+        database_retention_days = getattr(settings, "BACKUP_DATABASE_RETENTION_DAYS", 30)
+        manifest_retention_days = getattr(settings, "BACKUP_ATTACHMENT_MANIFEST_RETENTION_DAYS", 90)
+
+        if execute and not delete_enabled:
+            self.stdout.write(
+                self.style.WARNING(
+                    "BACKUP_DELETE_ENABLED=False. Set to True to allow deletion."
+                )
+            )
+            return
 
         if not backup_dir.exists():
             self.stdout.write("No backup directory found.")
