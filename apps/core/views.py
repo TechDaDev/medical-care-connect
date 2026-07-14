@@ -140,7 +140,14 @@ def _check_attachment_storage() -> bool:
     try:
         from apps.attachments.services.factory import clear_backend_cache, get_storage_backend
         clear_backend_cache()
-        return get_storage_backend()._root.exists()
+        backend = get_storage_backend()
+        backend_path = getattr(backend, "_root", None)
+        if backend_path is not None:
+            return backend_path.exists()
+        check = getattr(backend, "check_access", None)
+        if check is not None:
+            return check()
+        return True
     except Exception:
         return False
 

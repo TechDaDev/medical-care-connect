@@ -82,3 +82,11 @@ else:
             "CONN_MAX_AGE": env.int("CONN_MAX_AGE", default=0),
         },
     }
+
+# ── Railway Bucket ─────────────────────────────────────────────────────────
+
+if ATTACHMENT_STORAGE_BACKEND == "railway_bucket":  # noqa: F405
+    _require("RAILWAY_BUCKET_ENDPOINT", "Required when ATTACHMENT_STORAGE_BACKEND=railway_bucket")
+    _require("RAILWAY_BUCKET_NAME", "Required when ATTACHMENT_STORAGE_BACKEND=railway_bucket")
+    _require("RAILWAY_BUCKET_ACCESS_KEY", "Required when ATTACHMENT_STORAGE_BACKEND=railway_bucket")
+    _require("RAILWAY_BUCKET_SECRET_KEY", "Required when ATTACHMENT_STORAGE_BACKEND=railway_bucket")

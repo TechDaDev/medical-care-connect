@@ -8,6 +8,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from apps.attachments.services.base import AttachmentStorageBackend
 from apps.attachments.services.local import LocalProtectedStorageBackend
+from apps.attachments.services.railway_bucket import RailwayBucketStorageBackend
 
 _backend_cache: dict[str, AttachmentStorageBackend] = {}
 
@@ -20,10 +21,12 @@ def get_storage_backend() -> AttachmentStorageBackend:
 
     if provider == "local":
         backend: AttachmentStorageBackend = LocalProtectedStorageBackend()
+    elif provider == "railway_bucket":
+        backend = RailwayBucketStorageBackend()
     else:
         raise ImproperlyConfigured(
             f"Unknown ATTACHMENT_STORAGE_BACKEND: '{provider}'. "
-            f"Supported values: 'local'."
+            f"Supported values: 'local', 'railway_bucket'."
         )
 
     _backend_cache[provider] = backend
