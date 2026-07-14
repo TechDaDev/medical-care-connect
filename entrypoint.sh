@@ -1,6 +1,13 @@
 #!/bin/sh
 set -e
 
+# ── Optional: run production storage verification ────────────────────────────
+if [ "${RUN_VERIFICATION}" = "true" ]; then
+    echo "→ Running production storage verification..."
+    python manage.py verify_railway_storage_flows --execute
+    exit $?
+fi
+
 # ── Optional: run pending migrations ──────────────────────────────────────────
 if [ "${RUN_MIGRATIONS}" = "true" ]; then
     echo "→ Running database migrations..."
