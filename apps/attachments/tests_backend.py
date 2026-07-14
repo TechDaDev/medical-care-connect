@@ -6,8 +6,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase, override_settings
+
+from apps.accounts.models import UserRole
 
 from apps.attachments.services.base import AttachmentStorageBackend
 from apps.attachments.services.factory import clear_backend_cache, get_storage_backend
@@ -264,3 +267,114 @@ class FactoryTests(TestCase):
         """Without bucket config, factory fails on instantiation."""
         with self.assertRaises(Exception):
             get_storage_backend()
+
+
+class PrivacyExportStorageTests(TestCase):
+    """Privacy export storage through active backend."""
+
+    def setUp(self):
+        clear_backend_cache()
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            email="exporttest@example.com",
+            password="testpass123",
+            role=UserRole.PATIENT,
+        )
+        from apps.privacy.models import DataExportRequest
+        self.export = DataExportRequest.objects.create(
+            requested_by=self.user,
+            subject_user=self.user,
+        )
+
+    def _build_and_save(self, export):
+        """Run _build_export and persist storage fields (like handle() does)."""
+        from apps.attachments.services.factory import clear_backend_cache
+        clear_backend_cache()
+        from apps.core.management.commands.process_data_exports import Command
+        cmd = Command()
+        cmd._build_export(export)
+        export.save(update_fields=[
+            "storage_provider", "storage_key", "checksum", "size_bytes",
+        ])
+        export.refresh_from_db()
+
+    def test_local_backend_stores_export(self):
+        """Process export through local backend stores provider/key/size/checksum."""
+        self._build_and_save(self.export)
+        self.assertEqual(self.export.storage_provider, "local")
+        self.assertTrue(self.export.storage_key.startswith("privacy-exports/"))
+        self.assertGreater(self.export.size_bytes, 0)
+        self.assertEqual(len(self.export.checksum), 64)
+
+    @override_settings(
+        ATTACHMENT_STORAGE_BACKEND="railway_bucket",
+        RAILWAY_BUCKET_ENDPOINT="https://t3.storageapi.dev",
+        RAILWAY_BUCKET_NAME="test-bucket",
+        RAILWAY_BUCKET_ACCESS_KEY="test-key",
+        RAILWAY_BUCKET_SECRET_KEY="test-secret",
+        RAILWAY_BUCKET_REGION="auto",
+        RAILWAY_BUCKET_ADDRESSING_STYLE="virtual",
+        RAILWAY_BUCKET_CONNECT_TIMEOUT=5,
+        RAILWAY_BUCKET_READ_TIMEOUT=30,
+        RAILWAY_BUCKET_MAX_RETRIES=3,
+    )
+    def test_railway_bucket_backend_stores_export(self):
+        """Process export through mocked Railway Bucket stores provider/key."""
+        from apps.attachments.services.factory import clear_backend_cache, get_storage_backend
+        clear_backend_cache()
+        content = b"test export data"
+        with patch("boto3.client") as mock_boto:
+            mock_client = MagicMock()
+            mock_boto.return_value = mock_client
+            mock_client.head_object.return_value = {"ContentLength": len(content)}
+
+            backend = get_storage_backend()
+            from apps.attachments.services.railway_bucket import RailwayBucketStorageBackend
+            self.assertIsInstance(backend, RailwayBucketStorageBackend)
+
+            import uuid, io
+            sk = f"privacy-exports/test_{uuid.uuid4().hex}"
+            result = backend.save(io.BytesIO(content), sk)
+
+            self.assertEqual(result.provider, "railway_bucket")
+            self.assertEqual(result.size_bytes, len(content))
+            mock_client.put_object.assert_called_once()
+
+    @override_settings(ATTACHMENT_STORAGE_BACKEND="local")
+    def test_size_bytes_stored_correctly(self):
+        """size_bytes matches actual ZIP content size."""
+        self._build_and_save(self.export)
+        self.assertGreater(self.export.size_bytes, 100)
+
+    @override_settings(ATTACHMENT_STORAGE_BACKEND="local")
+    def test_checksum_is_valid_sha256(self):
+        """checksum is a valid 64-char hex string."""
+        self._build_and_save(self.export)
+        import hashlib
+        self.assertEqual(len(self.export.checksum), 64)
+        int(self.export.checksum, 16)  # raises on invalid hex
+
+    @override_settings(ATTACHMENT_STORAGE_BACKEND="local")
+    def test_download_through_storage_backend(self):
+        """Download export through backend returns content with matching checksum."""
+        self._build_and_save(self.export)
+
+        from apps.attachments.services.factory import get_storage_backend
+        backend = get_storage_backend()
+        f = backend.open(self.export.storage_key)
+        self.assertIsNotNone(f)
+        content = f.read()
+        f.close()
+
+        import hashlib
+        self.assertEqual(hashlib.sha256(content).hexdigest(), self.export.checksum)
+        self.assertEqual(len(content), self.export.size_bytes)
+
+    @override_settings(ATTACHMENT_STORAGE_BACKEND="local")
+    def test_serializer_hides_storage_key(self):
+        """DataExportRequestSerializer must not expose storage_key."""
+        from apps.privacy.serializers import DataExportRequestSerializer
+        field_names = set(DataExportRequestSerializer().fields.keys())
+        self.assertNotIn("storage_key", field_names)
+        self.assertNotIn("storage_provider", field_names)
+        self.assertNotIn("checksum", field_names)

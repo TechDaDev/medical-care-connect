@@ -10,11 +10,10 @@ Usage:
 import io
 import json
 import zipfile
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import timedelta
 
 from django.conf import settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.privacy.models import DataExportRequest, ExportStatus
@@ -47,9 +46,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Use --execute to process."))
             return
 
-        export_root = Path(getattr(settings, "DATA_EXPORT_ROOT", "exports"))
-        export_root.mkdir(parents=True, exist_ok=True)
-
         for exp in pending:
             self.stdout.write(f"Processing: {exp.id}")
             exp.status = ExportStatus.PROCESSING
@@ -57,23 +53,25 @@ class Command(BaseCommand):
             exp.save(update_fields=["status", "started_at"])
 
             try:
-                self._build_export(exp, export_root)
+                self._build_export(exp)
                 exp.status = ExportStatus.COMPLETED
                 exp.completed_at = timezone.now()
                 exp.expires_at = timezone.now() + timedelta(
                     days=getattr(settings, "DATA_EXPORT_EXPIRY_DAYS", 7)
                 )
-                exp.save(update_fields=["status", "completed_at", "expires_at",
-                                         "storage_key", "checksum", "size_bytes"])
+                exp.save(update_fields=[
+                    "status", "completed_at", "expires_at",
+                    "storage_provider", "storage_key", "checksum", "size_bytes",
+                ])
                 self.stdout.write(self.style.SUCCESS(f"  Completed: {exp.id}"))
             except Exception as e:
                 exp.status = ExportStatus.FAILED
-                exp.failure_code = str(e)[:100]
+                exp.failure_code = str(e)[:200]
                 exp.save(update_fields=["status", "failure_code"])
                 self.stdout.write(self.style.ERROR(f"  Failed: {exp.id} — {e}"))
 
-    def _build_export(self, exp, export_root: Path):
-        """Build ZIP archive with user data."""
+    def _build_export(self, exp):
+        """Build ZIP archive and store through active storage backend."""
         from django.contrib.auth import get_user_model
         User = get_user_model()
         user = User.objects.get(id=exp.subject_user_id)
@@ -96,14 +94,16 @@ class Command(BaseCommand):
             # Patient profile
             if hasattr(user, "patient_profile") and user.patient_profile:
                 pp = {
-                    "date_of_birth": str(user.patient_profile.date_of_birth) if user.patient_profile.date_of_birth else "",
+                    "date_of_birth": str(user.patient_profile.date_of_birth)
+                    if user.patient_profile.date_of_birth else "",
                 }
                 zf.writestr("patient_profile.json", json.dumps(pp, indent=2))
 
             # Consultations (metadata only)
             from apps.consultations.models import Consultation
             consultations = []
-            for c in Consultation.objects.filter(patient=user):
+            patient = getattr(user, "patient_profile", None)
+            for c in Consultation.objects.filter(patient=patient) if patient else []:
                 consultations.append({
                     "id": str(c.id),
                     "status": c.status,
@@ -114,10 +114,10 @@ class Command(BaseCommand):
                 })
             zf.writestr("consultations.json", json.dumps(consultations, indent=2))
 
-            # Messages (metadata + content the user sent/received)
-            from apps.messaging.models import Message
+            # Messages
+            from apps.messaging.models import ConsultationMessage
             msgs = []
-            for m in Message.objects.filter(consultation__patient=user):
+            for m in ConsultationMessage.objects.filter(consultation__patient=patient) if patient else []:
                 msgs.append({
                     "id": str(m.id),
                     "consultation_id": str(m.consultation_id),
@@ -147,18 +147,18 @@ class Command(BaseCommand):
                     "id": str(a.id),
                     "consultation_id": str(a.consultation_id),
                     "category": a.category,
-                    "filename": a.filename,
-                    "size": a.size,
+                    "original_filename": a.original_filename,
+                    "size_bytes": a.size_bytes,
                     "created_at": a.created_at.isoformat() if a.created_at else "",
                 })
-                # Include file content if available
                 if a.status == "available":
                     try:
                         from apps.attachments.services.factory import get_storage_backend
                         backend = get_storage_backend()
                         f = backend.open(a.storage_key)
                         if f:
-                            zf.writestr(f"attachments/{a.id}_{a.filename}", f.read())
+                            entry_name = f"attachments/{a.id}_{a.original_filename}"
+                            zf.writestr(entry_name, f.read())
                             f.close()
                     except Exception:
                         pass
@@ -175,18 +175,18 @@ class Command(BaseCommand):
                 })
             zf.writestr("audit_log.json", json.dumps(audits, indent=2))
 
-        # Store through attachment backend for protected download
+        # Store through attachment storage backend
         import hashlib
+        import uuid
         content = buffer.getvalue()
         checksum = hashlib.sha256(content).hexdigest()
 
-        # Write to local export directory
-        safe_name = f"export_{exp.id}.zip"
-        local_path = export_root / safe_name
-        with open(local_path, "wb") as f:
-            f.write(content)
+        from apps.attachments.services.factory import get_storage_backend
+        backend = get_storage_backend()
+        storage_key = f"privacy-exports/{exp.id.hex}_{uuid.uuid4().hex}"
+        result = backend.save(io.BytesIO(content), storage_key)
 
-        exp.storage_provider = "local"
-        exp.storage_key = str(local_path)
+        exp.storage_provider = result.provider
+        exp.storage_key = result.storage_key
         exp.checksum = checksum
-        exp.size_bytes = len(content)
+        exp.size_bytes = result.size_bytes
