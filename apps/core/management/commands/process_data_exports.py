@@ -109,7 +109,7 @@ class Command(BaseCommand):
                     "status": c.status,
                     "priority": c.priority,
                     "created_at": c.created_at.isoformat() if c.created_at else "",
-                    "doctor_name": c.doctor.full_name if c.doctor else "",
+                    "doctor_name": c.doctor.user.full_name if c.doctor and c.doctor.user else "",
                     "specialty": c.specialty.name if c.specialty else "",
                 })
             zf.writestr("consultations.json", json.dumps(consultations, indent=2))
