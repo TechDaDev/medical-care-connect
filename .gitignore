@@ -57,3 +57,4 @@ exports/
 protected_attachments/
 *.dump
 *.manifest.json
+.vite/

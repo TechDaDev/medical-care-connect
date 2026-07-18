@@ -3,6 +3,7 @@ from django.urls import path
 from apps.staff import views
 from apps.core.views import operations_status, operations_metrics
 from apps.privacy.views import deletion_approve, deletion_reject
+from apps.reviews.views import staff_moderate_review, staff_review_list, staff_report_list, staff_resolve_report
 
 app_name = "staff"
 
@@ -24,4 +25,9 @@ urlpatterns = [
     path("operations/metrics/", operations_metrics, name="operations-metrics"),
     path("privacy/deletion-requests/<uuid:id>/approve/", deletion_approve, name="deletion-approve"),
     path("privacy/deletion-requests/<uuid:id>/reject/", deletion_reject, name="deletion-reject"),
+    # Reviews / Moderation
+    path("reviews/", staff_review_list, name="staff-review-list"),
+    path("reviews/<uuid:review_id>/moderate/", staff_moderate_review, name="staff-review-moderate"),
+    path("reviews/reports/", staff_report_list, name="staff-report-list"),
+    path("reviews/reports/<uuid:report_id>/resolve/", staff_resolve_report, name="staff-report-resolve"),
 ]

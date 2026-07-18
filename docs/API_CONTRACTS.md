@@ -393,3 +393,189 @@ response, without `sha256`).
 
 `not_required`, `pending`, `clean`, `suspicious`, `infected`, `failed`
 
+---
+
+## Reviews (Phase 11)
+
+### POST /api/reviews/consultations/{id}/review/
+
+Create a review for a completed consultation.
+
+**Request:**
+```json
+{
+  "rating": 5,
+  "title": "Great doctor",
+  "body": "Very thorough and professional.",
+  "is_anonymous": false
+}
+```
+
+**Response 201:**
+```json
+{
+  "id": "uuid",
+  "consultation": "uuid",
+  "reviewer": "uuid",
+  "reviewer_name": "Test Patient",
+  "doctor_id": "uuid",
+  "doctor_name": "Test Doctor",
+  "rating": 5,
+  "title": "Great doctor",
+  "body": "Very thorough and professional.",
+  "is_anonymous": false,
+  "status": "published",
+  "consultation_status": "completed",
+  "has_response": false,
+  "response": null,
+  "report_count": 0,
+  "edit_count": 0,
+  "last_edited_at": null,
+  "moderated_at": null,
+  "moderation_reason": "",
+  "created_at": "2026-07-18T00:00:00Z",
+  "updated_at": "2026-07-18T00:00:00Z"
+}
+```
+
+**Error 400:** Consultation not completed  
+**Error 403:** Not patient's consultation  
+**Error 409:** Review already exists
+
+### GET /api/reviews/consultations/{id}/review/
+
+Get existing review for consultation.
+
+**Response 200:** Same shape as POST 201.  
+**Response 404:** No review found.
+
+### PATCH /api/reviews/consultations/{id}/review/edit/
+
+Update review (within 72hr window).
+
+**Request:** Any subset of `{ "rating", "title", "body", "is_anonymous" }`.
+
+**Response 200:** Updated review.
+
+### DELETE /api/reviews/consultations/{id}/review/edit/
+
+Delete review (within 72hr window).
+
+**Response 204:** No content.
+
+### GET /api/reviews/doctors/{id}/reviews/
+
+Paginated published reviews for a doctor.
+
+**Response 200:**
+```json
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "uuid",
+      "reviewer_name": "Anonymous",
+      "doctor_name": "Dr. Test",
+      "rating": 5,
+      "title": "Excellent",
+      "body": "...",
+      "status": "published",
+      "has_response": true,
+      "response": { "id": "uuid", "review": "uuid", "doctor": "uuid", "body": "Thank you!", "created_at": "...", "updated_at": "..." },
+      "report_count": 0,
+      "is_anonymous": false,
+      "created_at": "..."
+    }
+  ]
+}
+```
+
+### GET /api/reviews/doctors/{id}/reputation/
+
+Aggregated reputation.
+
+**Response 200:**
+```json
+{
+  "doctor_id": "uuid",
+  "doctor_name": "Dr. Test",
+  "average_rating": 4.5,
+  "total_reviews": 12,
+  "rating_distribution": { "1": 0, "2": 1, "3": 2, "4": 4, "5": 5 },
+  "response_rate": 75.0,
+  "recent_ratings_trend": "stable"
+}
+```
+
+### POST /api/reviews/reviews/{id}/response/
+
+Doctor responds to a review.
+
+**Request:** `{ "body": "Thank you for your feedback!" }`  
+**Response 201:** DoctorReviewResponse shape.
+
+### PATCH /api/reviews/reviews/{id}/response/
+
+Update doctor's response.
+
+### DELETE /api/reviews/reviews/{id}/response/
+
+Delete doctor's response. **Response 204.**
+
+### POST /api/reviews/reviews/{id}/report/
+
+Report a review.
+
+**Request:**
+```json
+{
+  "reason": "inappropriate|spam|fake|conflict_of_interest|privacy_violation|other",
+  "description": "Optional details"
+}
+```
+
+**Response 201:** ReviewReport shape.  
+**Error 409:** Duplicate open report.
+
+### GET /api/staff/reviews/?status=published&rating=5
+
+Staff list of all reviews. Supports `status` and `rating` query params.
+
+**Response 200:** Paginated reviews (same shape as doctor reviews).
+
+### PATCH /api/staff/reviews/{id}/moderate/
+
+Staff moderation action.
+
+**Request:**
+```json
+{
+  "status": "hidden|published|removed",
+  "moderation_reason": "Optional reason"
+}
+```
+
+**Response 200:** Updated review.
+
+### GET /api/staff/reviews/reports/?resolved=false
+
+Staff report list. Supports `resolved=true|false` query param.
+
+**Response 200:** Paginated ReviewReport list.
+
+### PATCH /api/staff/reviews/reports/{id}/resolve/
+
+Resolve a report.
+
+**Request:**
+```json
+{
+  "resolution": "dismissed|content_hidden|content_removed|reviewer_warned|reviewer_suspended",
+  "resolution_notes": "Optional notes"
+}
+```
+
+**Response 200:** Updated ReviewReport.
+

@@ -12,6 +12,11 @@ class NotificationType(models.TextChoices):
     RECORD_CONFIRMED = "record_confirmed", _("Record Confirmed")
     RECORD_REVISION_REQUESTED = "record_revision_requested", _("Record Revision Requested")
     STATUS_CHANGE = "status_change", _("Status Change")
+    # Phase 11 — Reviews
+    REVIEW_AVAILABLE = "review_available", _("Review Available")
+    REVIEW_RESPONSE = "review_response", _("Review Response")
+    MODERATION_STATE = "moderation_state", _("Moderation State")
+    REPORT_RESOLUTION = "report_resolution", _("Report Resolution")
 
 
 class Notification(BaseModel):
