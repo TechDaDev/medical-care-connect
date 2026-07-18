@@ -6,17 +6,17 @@ A modular Django backend that powers a platform connecting patients with healthc
 
 ## Current Phase
 
-**Phase 3 — Public Doctor Directory, Availability & Consultations (complete)**
+**Phase 11 — Reviews, Reputation, Moderation & Trust (complete)**
 
-- Public doctor directory with filtering (specialty, specialty_slug, accepting, language, search, ordering)
-- `DoctorAvailability` model per doctor (day_of_week, start_time, end_time, is_active)
-- Doctor availability CRUD via API
-- Accepting-consultations status toggle
-- `Consultation` model with full lifecycle (submitted → accepted → cancelled)
-- Patient creates consultations (validates doctor approved+accepting+active)
-- Role-scoped consultation list/detail (patient owns, doctor assigned, coordinator/admin all)
-- Accept endpoint (assigned doctor only, submitted → accepted)
-- Cancel endpoint (patient/doctor/coordinator/admin, requires reason)
+- Patient reviews for completed consultations (1–5★ ratings)
+- 72-hour editable review window with withdrawal support
+- Anonymous review option with identity privacy guarantees
+- Doctor public reputation: average rating, distribution, response rate, trend
+- Doctor responses to reviews (one per review)
+- Review reporting with 6 reason categories
+- Staff moderation: hide, remove, restore, manage reports
+- Notification events for all review workflows
+- Trilingual interface (English, Arabic, Kurdish Sorani)
 
 ## Requirements
 
