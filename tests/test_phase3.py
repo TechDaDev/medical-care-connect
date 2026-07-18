@@ -39,7 +39,7 @@ class PublicDoctorDirectoryTests(TestCase):
     """Tests for the public doctor directory."""
 
     def setUp(self) -> None:
-        self.spec = Specialty.objects.create(name="Cardiology", slug="cardiology")
+        self.spec = Specialty.objects.create(name="TestCardiology", slug="test-cardiology")
         # Approved doctor
         self.doc_user = User.objects.create_user(
             email="doctor@example.com", password="pass123",

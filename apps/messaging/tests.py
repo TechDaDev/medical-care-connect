@@ -33,7 +33,7 @@ class Phase5MessagingTests(APITestCase):
             email="other@test.com", password="testpass123",
             role=UserRole.PATIENT,
         )
-        cls.specialty = Specialty.objects.create(name="Cardiology", slug="cardiology")
+        cls.specialty = Specialty.objects.create(name="TestCardiology", slug="test-cardiology")
         cls.patient_profile = PatientProfile.objects.create(
             user=cls.patient_user, date_of_birth="1990-01-01",
         )

@@ -13,7 +13,7 @@ from apps.specialties.models import Specialty
 
 class DoctorRegistrationTests(APITestCase):
     def setUp(self):
-        self.specialty = Specialty.objects.create(name="Cardiology", is_active=True)
+        self.specialty, _ = Specialty.objects.get_or_create(name="Cardiology", defaults={"is_active": True})
         self.coordinator = User.objects.create_user(
             email="coordinator@example.com", password="testpass123",
             role=UserRole.COORDINATOR,

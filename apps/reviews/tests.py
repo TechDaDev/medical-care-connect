@@ -43,7 +43,7 @@ class ReviewAPITestCase(TestCase):
         )
 
         # Profiles
-        spec = Specialty.objects.create(name="Cardiology")
+        spec = Specialty.objects.create(name="TestCardiology")
         cls.doctor = DoctorProfile.objects.create(
             user=cls.doctor_user, specialty=spec,
             license_number="DOC001",

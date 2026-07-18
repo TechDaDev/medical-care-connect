@@ -170,7 +170,7 @@ class TransferTests(TestCase):
     def test_coordinator_can_transfer(self):
         """Coordinator can transfer a consultation."""
         coord = _create_user("coord@test.com", UserRole.COORDINATOR)
-        spec = Specialty.objects.create(name="Cardiology", slug="cardio")
+        spec = Specialty.objects.create(name="TestCardiology", slug="test-cardiology-ph7")
         old_doc = _create_doctor(
             _create_user("old@test.com", UserRole.DOCTOR), spec
         )
