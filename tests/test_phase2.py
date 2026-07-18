@@ -202,9 +202,8 @@ class SpecialtiesAPITests(TestCase):
         url = reverse("specialties:specialty-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        # ViewSet returns paginated response; results key contains items
         data = response.json()
-        items = data.get("results", data)
+        items = data if isinstance(data, list) else data.get("results", data)
         self.assertGreaterEqual(len(items), 2)
 
     def test_retrieve_specialty_public(self) -> None:

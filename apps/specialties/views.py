@@ -20,6 +20,7 @@ class SpecialtyViewSet(
 
     queryset = Specialty.objects.all()
     lookup_field = "id"
+    pagination_class = None  # return all specialties — small, static dataset
 
     def get_serializer_class(self):
         if self.action == "list":
