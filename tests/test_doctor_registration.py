@@ -1,5 +1,8 @@
 from unittest.mock import patch
 
+import json
+from io import BytesIO
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -18,18 +21,23 @@ class DoctorRegistrationTests(APITestCase):
             email="coordinator@example.com", password="testpass123",
             role=UserRole.COORDINATOR,
         )
-        self.payload = {
+        self.payload = {"email": "ava@example.com"}
+
+    def _reg_payload(self):
+        return {
             "first_name": "Ava", "last_name": "Doctor", "email": "ava@example.com",
             "phone_number": "+9647000000000", "password": "testpass123",
             "password_confirm": "testpass123", "specialty": str(self.specialty.id),
             "medical_license_number": "iq-med-001", "years_of_experience": 7,
             "workplace_name": "City Hospital", "professional_bio": "Board certified.",
-            "languages": ["ar", "en"],
+            "languages": '["ar","en"]',
+            "medical_license_document": SimpleUploadedFile("license.pdf", b"fake-pdf", content_type="application/pdf"),
         }
 
     def register(self, **overrides):
+        data = {**self._reg_payload(), **overrides}
         return self.client.post(
-            reverse("accounts:register-doctor"), {**self.payload, **overrides}, format="json"
+            reverse("accounts:register-doctor"), data, format="multipart"
         )
 
     def test_registration_creates_pending_private_doctor(self):

@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -131,14 +132,20 @@ class RegisterDoctorSerializer(serializers.ModelSerializer):
     professional_bio = serializers.CharField(max_length=2000)
     workplace_name = serializers.CharField(max_length=255)
     years_of_experience = serializers.IntegerField(min_value=0, max_value=70)
-    languages = serializers.ListField(
-        child=serializers.ChoiceField(choices=("ar", "en", "ckb")), min_length=1
-    )
+    languages = serializers.JSONField(required=False)
+
+    def validate_languages(self, value):
+        if isinstance(value, str):
+            value = json.loads(value)
+        if isinstance(value, list) and all(v in ("ar", "en", "ckb") for v in value):
+            return value
+        raise serializers.ValidationError("Provide at least one valid language.")
     consultation_fee = serializers.DecimalField(
         max_digits=10, decimal_places=2, required=False, min_value=Decimal("0")
     )
     education = serializers.CharField(required=False, allow_blank=True, max_length=2000)
     certifications = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    medical_license_document = serializers.FileField(allow_empty_file=False)
 
     class Meta:
         model = User
@@ -147,6 +154,7 @@ class RegisterDoctorSerializer(serializers.ModelSerializer):
             "password_confirm", "specialty", "medical_license_number",
             "years_of_experience", "workplace_name", "professional_bio", "languages",
             "consultation_fee", "education", "certifications",
+            "medical_license_document",
         ]
 
     def validate_medical_license_number(self, value):
@@ -169,6 +177,7 @@ class RegisterDoctorSerializer(serializers.ModelSerializer):
         education = validated_data.pop("education", "")
         certifications = validated_data.pop("certifications", "")
         qualifications = "\n".join(part for part in (education, certifications) if part)
+        license_doc = validated_data.pop("medical_license_document", None)
         profile_fields = {
             key: validated_data.pop(key)
             for key in (
@@ -189,6 +198,7 @@ class RegisterDoctorSerializer(serializers.ModelSerializer):
                     license_number=license_number,
                     biography=professional_bio,
                     qualifications=qualifications,
+                    medical_license_document=license_doc,
                     is_approved=False,
                     is_accepting_consultations=False,
                     approval_status=DoctorProfile.ApprovalStatus.PENDING,

@@ -58,6 +58,13 @@ class DoctorProfile(BaseModel):
         _("approval status"), max_length=16,
         choices=ApprovalStatus.choices, default=ApprovalStatus.PENDING,
     )
+    medical_license_document = models.FileField(
+        _("medical license document"),
+        upload_to="license_documents/",
+        blank=True,
+        max_length=500,
+        help_text=_("Uploaded copy of the medical license for staff verification."),
+    )
     approval_note = models.CharField(_("approval note"), max_length=500, blank=True)
     is_accepting_consultations = models.BooleanField(
         _("accepting consultations"),
