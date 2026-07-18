@@ -7,6 +7,7 @@ import logging
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from unittest import skipIf
 
 from django.conf import settings
 from django.test import TestCase, override_settings
@@ -145,6 +146,7 @@ class OperationsTests(TestCase):
         resp = self.client.get("/api/staff/operations/status/")
         self.assertEqual(resp.status_code, 403)
 
+    @skipIf(settings.DATABASES["default"]["ENGINE"].endswith("sqlite3"), "backup_database requires PostgreSQL")
     def test_backup_dry_run_creates_nothing(self):
         backup_dir = Path(tempfile.mkdtemp())
         orig = settings.BACKUP_ROOT

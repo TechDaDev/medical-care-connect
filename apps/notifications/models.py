@@ -17,6 +17,8 @@ class NotificationType(models.TextChoices):
     REVIEW_RESPONSE = "review_response", _("Review Response")
     MODERATION_STATE = "moderation_state", _("Moderation State")
     REPORT_RESOLUTION = "report_resolution", _("Report Resolution")
+    DOCTOR_APPLICATION = "doctor_application", _("Doctor Application")
+    DOCTOR_APPLICATION_STATUS = "doctor_application_status", _("Doctor Application Status")
 
 
 class Notification(BaseModel):

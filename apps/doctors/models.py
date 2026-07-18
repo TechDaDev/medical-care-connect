@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils.translation import gettext_lazy as _
 
 from apps.accounts.models import UserRole
@@ -26,6 +27,7 @@ class DoctorProfile(BaseModel):
     license_number = models.CharField(
         _("license number"), max_length=100, unique=True, blank=True
     )
+    workplace_name = models.CharField(_("workplace name"), max_length=255, blank=True)
     qualifications = models.TextField(
         _("qualifications"), blank=True,
         help_text=_("List of medical qualifications, one per line."),
@@ -46,6 +48,17 @@ class DoctorProfile(BaseModel):
         default=False,
         help_text=_("Designates whether this doctor has been approved by a coordinator or admin."),
     )
+    class ApprovalStatus(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        APPROVED = "approved", _("Approved")
+        REJECTED = "rejected", _("Rejected")
+        SUSPENDED = "suspended", _("Suspended")
+
+    approval_status = models.CharField(
+        _("approval status"), max_length=16,
+        choices=ApprovalStatus.choices, default=ApprovalStatus.PENDING,
+    )
+    approval_note = models.CharField(_("approval note"), max_length=500, blank=True)
     is_accepting_consultations = models.BooleanField(
         _("accepting consultations"),
         default=False,
@@ -59,6 +72,13 @@ class DoctorProfile(BaseModel):
         verbose_name = _("doctor profile")
         verbose_name_plural = _("doctor profiles")
         ordering = ["user__first_name", "user__last_name"]
+        constraints = [
+            models.UniqueConstraint(
+                Lower("license_number"),
+                name="doctors_unique_license_number_ci",
+                condition=~models.Q(license_number=""),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"Dr. {self.user.full_name}"

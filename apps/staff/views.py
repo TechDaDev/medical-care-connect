@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -32,6 +33,8 @@ from apps.staff.serializers import (
     StaffConsultationListSerializer,
     TransferConsultationSerializer,
 )
+from apps.core.security_events import doctor_application_reviewed
+from apps.notifications.services import notify_doctor_application_status
 
 _ACTIVE_STATUSES = (
     ConsultationStatus.SUBMITTED,
@@ -49,6 +52,61 @@ class StaffPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
+def doctor_application_list(request: Request) -> Response:
+    """Authorized application queue. License data stays staff-only."""
+    queryset = DoctorProfile.objects.select_related("user", "specialty").filter(
+        approval_status=request.query_params.get("status", "pending")
+    ).order_by("created_at")
+    return Response([
+        {
+            "id": str(profile.id), "name": profile.user.full_name,
+            "specialty": profile.specialty.name if profile.specialty else None,
+            "years_of_experience": profile.years_of_experience,
+            "workplace_name": profile.workplace_name, "biography": profile.biography,
+            "license_number": profile.license_number, "approval_status": profile.approval_status,
+            "created_at": profile.created_at,
+        }
+        for profile in queryset
+    ])
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
+def review_doctor_application(request: Request, profile_id: str) -> Response:
+    """Approve, reject, or suspend application; status remains server-owned."""
+    action = request.data.get("action")
+    status_map = {
+        "approve": DoctorProfile.ApprovalStatus.APPROVED,
+        "reject": DoctorProfile.ApprovalStatus.REJECTED,
+        "suspend": DoctorProfile.ApprovalStatus.SUSPENDED,
+    }
+    if action not in status_map:
+        return Response({"detail": "Invalid review action."}, status=status.HTTP_400_BAD_REQUEST)
+    note = str(request.data.get("reason", "")).strip()
+    if len(note) > 500:
+        return Response({"detail": "Reason is too long."}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile = get_object_or_404(DoctorProfile.objects.select_related("user"), pk=profile_id)
+    new_status = status_map[action]
+    with transaction.atomic():
+        profile.approval_status = new_status
+        profile.is_approved = new_status == DoctorProfile.ApprovalStatus.APPROVED
+        if not profile.is_approved:
+            profile.is_accepting_consultations = False
+        profile.approval_note = note
+        profile.save(update_fields=[
+            "approval_status", "is_approved", "is_accepting_consultations",
+            "approval_note", "updated_at",
+        ])
+        doctor_application_reviewed(
+            str(profile.user_id), str(profile.id), new_status, str(request.user.id)
+        )
+        notify_doctor_application_status(profile)
+    return Response({"id": str(profile.id), "approval_status": profile.approval_status})
 
 
 # ── Staff Dashboard ─────────────────────────────────────────────────────────

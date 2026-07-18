@@ -25,6 +25,20 @@ class IsDoctor(BasePermission):
         )
 
 
+class IsApprovedDoctor(BasePermission):
+    """Grant doctor-only operational access after staff approval."""
+
+    def has_permission(self, request, view):
+        profile = getattr(request.user, "doctor_profile", None)
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == UserRole.DOCTOR
+            and profile
+            and profile.is_approved
+        )
+
+
 class IsCoordinator(BasePermission):
     """Grant access if the authenticated user has the coordinator role."""
 

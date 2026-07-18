@@ -578,4 +578,7 @@ Resolve a report.
 ```
 
 **Response 200:** Updated ReviewReport.
+# Doctor registration
+
+`POST /api/auth/register/doctor/` accepts account fields plus `specialty`, `medical_license_number`, `years_of_experience`, `workplace_name`, `professional_bio`, and `languages`. It returns only safe user identity fields, pending application status, profile ID, and pending-approval next path. It never returns license numbers, passwords, or staff metadata.
 

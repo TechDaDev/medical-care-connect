@@ -25,6 +25,7 @@ from apps.core.security_events import (
 from apps.accounts.serializers import (
     CurrentUserSerializer,
     LoginSerializer,
+    RegisterDoctorSerializer,
     RegisterPatientSerializer,
     UpdateUserSerializer,
 )
@@ -104,6 +105,35 @@ def register_patient(request: Request) -> Response:
     refresh = RefreshToken.for_user(user)
     data = {"user": CurrentUserSerializer(user).data}
     response = Response(data, status=status.HTTP_201_CREATED)
+    set_auth_cookies(response, str(refresh.access_token), str(refresh))
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([RegisterRateThrottle])
+@csrf_exempt
+def register_doctor(request: Request) -> Response:
+    """Create pending doctor application and authenticate account via cookies."""
+    serializer = RegisterDoctorSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    user = serializer.save()
+    profile = user.doctor_profile
+
+    refresh = RefreshToken.for_user(user)
+    response = Response(
+        {
+            "user": {
+                "id": str(user.id), "role": user.role,
+                "first_name": user.first_name, "last_name": user.last_name,
+            },
+            "doctor_profile": {
+                "id": str(profile.id), "approval_status": profile.approval_status,
+            },
+            "next_path": "/app/doctor/pending-approval",
+        },
+        status=status.HTTP_201_CREATED,
+    )
     set_auth_cookies(response, str(refresh.access_token), str(refresh))
     return response
 

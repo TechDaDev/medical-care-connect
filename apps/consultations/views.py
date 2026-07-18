@@ -7,7 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import IsDoctor, IsPatient
+from apps.accounts.permissions import IsApprovedDoctor, IsPatient
 from apps.ai_intake.serializers import StartIntakeResponseSerializer
 from apps.ai_intake.services.base import AIProviderDisabled
 from apps.ai_intake.services.intake import start_intake_session
@@ -120,7 +120,7 @@ def consultation_detail(request: Request, pk: str) -> Response:
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def accept_consultation(request: Request, pk: str) -> Response:
     """Accept a consultation. Only the assigned doctor can accept."""
     consultation = get_object_or_404(

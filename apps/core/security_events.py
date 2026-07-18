@@ -99,6 +99,15 @@ def account_deactivated(user_id: str, by_user: str = ""):
     _safe_event("account.deactivated", user_id=user_id, by_user=by_user)
 
 
+def doctor_application_created(user_id: str, profile_id: str):
+    _safe_event("doctor.application.created", user_id=user_id, profile_id=profile_id)
+
+
+def doctor_application_reviewed(user_id: str, profile_id: str, status: str, by_user: str):
+    _safe_event("doctor.application.reviewed", user_id=user_id, profile_id=profile_id,
+                status=status, by_user=by_user)
+
+
 # ── Data ──
 
 def data_export_requested(user_id: str):

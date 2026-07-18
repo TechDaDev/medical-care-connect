@@ -10,6 +10,7 @@ urlpatterns = [
     path("readiness/", views.readiness_check, name="readiness"),
     # Auth
     path("auth/register/patient/", views.register_patient, name="register-patient"),
+    path("auth/register/doctor/", views.register_doctor, name="register-doctor"),
     path("auth/login/", views.LoginView.as_view(), name="login"),
     path("auth/token/refresh/", views.CookieTokenRefreshView.as_view(), name="token-refresh"),
     path("auth/logout/", views.logout_view, name="logout"),

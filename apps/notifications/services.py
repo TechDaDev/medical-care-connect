@@ -25,6 +25,41 @@ def create_notification(
     )
 
 
+def notify_doctor_application(profile) -> None:
+    """Notify authorized staff without exposing application PII."""
+    from apps.accounts.models import User, UserRole
+    from apps.notifications.models import NotificationType
+
+    recipients = User.objects.filter(
+        role__in=(UserRole.COORDINATOR, UserRole.ADMINISTRATOR), is_active=True
+    )
+    for recipient in recipients:
+        create_notification(
+            recipient=recipient,
+            notification_type=NotificationType.DOCTOR_APPLICATION,
+            title="New doctor application",
+            body="A doctor application is ready for review.",
+        )
+
+
+def notify_doctor_application_status(profile) -> None:
+    from apps.notifications.models import NotificationType
+
+    status = profile.approval_status
+    title = "Doctor application approved" if status == "approved" else "Doctor application update"
+    body = (
+        "Your application has been approved. Enable consultations when ready."
+        if status == "approved"
+        else "Your application was not approved. Contact support if you need help."
+    )
+    create_notification(
+        recipient=profile.user,
+        notification_type=NotificationType.DOCTOR_APPLICATION_STATUS,
+        title=title,
+        body=body,
+    )
+
+
 def notify_new_message(message):
     """Notify the consultation participants (excluding sender) about a new message."""
     consultation = message.consultation

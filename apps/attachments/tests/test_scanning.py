@@ -65,7 +65,7 @@ class ClamavScannerMockedTests(TestCase):
     @patch("socket.socket")
     def test_clean_file_accepted(self, mock_socket):
         mock_instance = mock_socket.return_value
-        mock_instance.recv.return_value = b"stream: OK"
+        mock_instance.recv.side_effect = [b"stream: OK", b""]
         scanner = get_scanner()
         result = scanner.scan(io.BytesIO(b"clean pdf content"))
         self.assertEqual(result.status, ScanResult.CLEAN)
@@ -73,7 +73,7 @@ class ClamavScannerMockedTests(TestCase):
     @patch("socket.socket")
     def test_infected_file_rejected(self, mock_socket):
         mock_instance = mock_socket.return_value
-        mock_instance.recv.return_value = b"stream: Eicar-Test-Signature FOUND"
+        mock_instance.recv.side_effect = [b"stream: Eicar-Test-Signature FOUND", b""]
         scanner = get_scanner()
         result = scanner.scan(io.BytesIO(EICAR))
         self.assertEqual(result.status, ScanResult.INFECTED)
@@ -111,7 +111,7 @@ class ClamavScannerMockedTests(TestCase):
     @patch("socket.socket")
     def test_oversized_file_rejected(self, mock_socket):
         mock_instance = mock_socket.return_value
-        mock_instance.recv.return_value = b"stream: OK"
+        mock_instance.recv.side_effect = [b"stream: OK", b""]
         scanner = get_scanner()
         big = io.BytesIO(b"x" * (100 * 1024 * 1024))
         result = scanner.scan(big)

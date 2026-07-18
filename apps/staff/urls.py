@@ -21,6 +21,8 @@ urlpatterns = [
         name="consultation-priority",
     ),
     path("doctors/workload/", views.doctor_workload, name="doctor-workload"),
+    path("doctors/applications/", views.doctor_application_list, name="doctor-application-list"),
+    path("doctors/applications/<uuid:profile_id>/review/", views.review_doctor_application, name="doctor-application-review"),
     path("operations/status/", operations_status, name="operations-status"),
     path("operations/metrics/", operations_metrics, name="operations-metrics"),
     path("privacy/deletion-requests/<uuid:id>/approve/", deletion_approve, name="deletion-approve"),

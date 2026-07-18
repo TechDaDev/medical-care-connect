@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.accounts.permissions import IsDoctor, IsDoctorOrAdministrator
+from apps.accounts.permissions import IsApprovedDoctor, IsDoctor
 from apps.consultations.models import Consultation
 from apps.doctors.models import DoctorAvailability, DoctorProfile
 from apps.doctors.serializers import (
@@ -53,7 +53,7 @@ from apps.notifications.models import Notification
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def my_doctor_dashboard(request: Request) -> Response:
     """Dashboard summary for the authenticated doctor."""
     profile = getattr(request.user, "doctor_profile", None)
@@ -196,7 +196,7 @@ def public_doctor_detail(request: Request, pk: str) -> Response:
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def my_availability_list(request: Request) -> Response:
     """List or create availability slots for the authenticated doctor."""
     profile = getattr(request.user, "doctor_profile", None)
@@ -218,7 +218,7 @@ def my_availability_list(request: Request) -> Response:
 
 
 @api_view(["PATCH", "DELETE"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def my_availability_detail(request: Request, pk: str) -> Response:
     """Update or delete a specific availability slot."""
     profile = getattr(request.user, "doctor_profile", None)
@@ -246,7 +246,7 @@ def my_availability_detail(request: Request, pk: str) -> Response:
 
 
 @api_view(["PATCH"])
-@permission_classes([IsAuthenticated, IsDoctorOrAdministrator])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def update_accepting_status(request: Request) -> Response:
     """Toggle the doctor accepting-consultations flag."""
     # Allow admins/coordinators to set for any doctor, or doctor to set own
