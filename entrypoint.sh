@@ -8,11 +8,9 @@ if [ "${RUN_VERIFICATION}" = "true" ]; then
     exit $?
 fi
 
-# ── Optional: run pending migrations ──────────────────────────────────────────
-if [ "${RUN_MIGRATIONS}" = "true" ]; then
-    echo "→ Running database migrations..."
-    python manage.py migrate --noinput
-fi
+# ── Run pending migrations ────────────────────────────────────────────────────
+echo "→ Running database migrations..."
+python manage.py migrate --noinput
 
 # ── Collect static files ──────────────────────────────────────────────────────
 echo "→ Collecting static files..."

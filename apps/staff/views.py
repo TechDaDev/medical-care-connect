@@ -9,10 +9,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from django.http import FileResponse
+
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import (
     IsCoordinatorOrAdministrator,
 )
+from apps.attachments.services.factory import get_storage_backend
 from apps.core.security_events import (
     consultation_priority_changed,
     consultation_transferred,
@@ -23,7 +26,7 @@ from apps.consultations.models import (
     ConsultationStatus,
     ConsultationTransfer,
 )
-from apps.doctors.models import DoctorProfile
+from apps.doctors.models import DoctorProfile, LicenseDocument
 from apps.messaging.models import ConsultationMessage
 from apps.notifications.models import Notification, NotificationType
 from apps.notifications.services import create_notification
@@ -438,3 +441,20 @@ def doctor_workload(request: Request) -> Response:
         })
 
     return Response(results)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
+def download_license_document(request: Request, profile_id: str) -> Response:
+    """Stream a doctor's license document to authorized staff only."""
+    profile = get_object_or_404(DoctorProfile, id=profile_id)
+    license_doc = get_object_or_404(LicenseDocument, doctor_profile=profile)
+
+    backend = get_storage_backend()
+    stream = backend.open(license_doc.storage_key)
+    if stream is None:
+        return Response(
+            {"detail": "License document not found on storage.", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return FileResponse(stream, filename=license_doc.original_filename, as_attachment=True)

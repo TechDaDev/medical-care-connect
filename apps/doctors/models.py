@@ -1,8 +1,11 @@
+import uuid
+
 from django.db import models
 from django.db.models.functions import Lower
 from django.utils.translation import gettext_lazy as _
 
 from apps.accounts.models import UserRole
+from apps.attachments.choices import ScanStatus
 from apps.core.models import BaseModel
 
 
@@ -101,6 +104,59 @@ class DoctorProfile(BaseModel):
     def save(self, *args, **kwargs):
         self.clean()
         super().save(*args, **kwargs)
+
+
+def _license_storage_key(original_filename: str) -> str:
+    """Generate a non-identifying storage key for a license document."""
+    ext = original_filename.rsplit(".", 1)[-1].lower() if "." in original_filename else ""
+    return f"licenses/{uuid.uuid4().hex}{f'.{ext}' if ext else ''}"
+
+
+class LicenseDocument(BaseModel):
+    """Medical license document stored through the protected attachment backend.
+
+    Never exposed via a public URL. Accessed only through authorized
+    staff download endpoints.
+    """
+
+    doctor_profile = models.OneToOneField(
+        DoctorProfile,
+        on_delete=models.CASCADE,
+        related_name="license_document",
+        verbose_name=_("doctor profile"),
+    )
+    storage_provider = models.CharField(
+        _("storage provider"), max_length=50,
+    )
+    storage_key = models.CharField(
+        _("storage key"), max_length=500, unique=True,
+    )
+    original_filename = models.CharField(
+        _("original filename"), max_length=500,
+    )
+    extension = models.CharField(_("extension"), max_length=20, blank=True)
+    declared_mime_type = models.CharField(_("declared MIME type"), max_length=100, blank=True)
+    detected_mime_type = models.CharField(_("detected MIME type"), max_length=100, blank=True)
+    size_bytes = models.BigIntegerField(_("size bytes"), default=0)
+    sha256 = models.CharField(_("SHA-256"), max_length=64, blank=True)
+    scan_status = models.CharField(
+        _("scan status"),
+        max_length=20,
+        choices=ScanStatus.choices,
+        default=ScanStatus.NOT_REQUIRED,
+    )
+    is_verified = models.BooleanField(
+        _("verified"),
+        default=False,
+        help_text=_("Staff has verified the document matches the applicant."),
+    )
+
+    class Meta:
+        verbose_name = _("license document")
+        verbose_name_plural = _("license documents")
+
+    def __str__(self) -> str:
+        return f"License for {self.doctor_profile} ({self.extension})"
 
 
 class Weekday(models.TextChoices):

@@ -32,4 +32,5 @@ urlpatterns = [
     path("reviews/<uuid:review_id>/moderate/", staff_moderate_review, name="staff-review-moderate"),
     path("reviews/reports/", staff_report_list, name="staff-report-list"),
     path("reviews/reports/<uuid:report_id>/resolve/", staff_resolve_report, name="staff-report-resolve"),
+    path("doctors/applications/<uuid:profile_id>/license/", views.download_license_document, name="doctor-license-download"),
 ]

@@ -30,7 +30,9 @@ COPY --chown=django:django entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 RUN mkdir -p /app/staticfiles && chown django:django /app/staticfiles && \
-    mkdir -p /app/protected_attachments && chown django:django /app/protected_attachments
+    mkdir -p /app/protected_attachments && chown django:django /app/protected_attachments && \
+    mkdir -p /app/media/license_documents && chown django:django /app/media/license_documents && \
+    chown django:django /app/media
 
 EXPOSE 8000
 
