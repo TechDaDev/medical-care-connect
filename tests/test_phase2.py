@@ -298,8 +298,10 @@ class DoctorProfileAPITests(TestCase):
         data = response.json()
         self.assertEqual(data["email"], "doctor@example.com")
         self.assertEqual(data["specialty_name"], "TestCardiologyPh2")
-        self.assertEqual(data["license_number"], "LIC-12345")
         self.assertFalse(data["is_approved"])
+        self.assertNotIn("license_number", data)
+        self.assertIn("has_license_document", data)
+        self.assertIn("license_document_verified", data)
 
     def test_update_profile(self) -> None:
         url = reverse("doctors:my-profile")
@@ -319,9 +321,19 @@ class DoctorProfileAPITests(TestCase):
             self.client, url, {"is_approved": True},
             **{"HTTP_AUTHORIZATION": f"Bearer {self.token}"},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
         self.profile.refresh_from_db()
         self.assertFalse(self.profile.is_approved)
+
+    def test_doctor_cannot_change_license_number(self) -> None:
+        url = reverse("doctors:my-profile")
+        response = _jpatch(
+            self.client, url, {"license_number": "NEW-LIC-999"},
+            **{"HTTP_AUTHORIZATION": f"Bearer {self.token}"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.license_number, "LIC-12345")
 
     def test_patient_cannot_access_doctor_profile(self) -> None:
         pat = User.objects.create_user(

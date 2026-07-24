@@ -12,14 +12,24 @@ from apps.doctors.models import DoctorAvailability, DoctorProfile
 from apps.doctors.serializers import (
     DoctorAcceptingStatusSerializer,
     DoctorAvailabilitySerializer,
-    DoctorProfileDetailSerializer,
-    DoctorProfileSerializer,
+    DoctorOwnProfileReadSerializer,
+    DoctorOwnProfileUpdateSerializer,
     PublicDoctorDetailSerializer,
     PublicDoctorListSerializer,
 )
 
 
 # ── My Profile ──────────────────────────────────────────────────────────────
+
+
+PROTECTED_DOCTOR_FIELDS = {
+    "license_number",
+    "approval_status",
+    "is_approved",
+    "approval_note",
+    "is_accepting_consultations",
+    "medical_license_document",
+}
 
 
 @api_view(["GET", "PATCH"])
@@ -34,14 +44,27 @@ def my_doctor_profile(request: Request) -> Response:
         )
 
     if request.method == "GET":
-        serializer = DoctorProfileDetailSerializer(profile)
+        serializer = DoctorOwnProfileReadSerializer(profile)
         return Response(serializer.data)
 
-    serializer = DoctorProfileSerializer(profile, data=request.data, partial=True)
+    # Reject protected fields explicitly
+    protected_attempted = PROTECTED_DOCTOR_FIELDS & set(request.data.keys())
+    if protected_attempted:
+        return Response(
+            {
+                field: ["This field cannot be changed through profile update."]
+                for field in sorted(protected_attempted)
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    serializer = DoctorOwnProfileUpdateSerializer(
+        profile, data=request.data, partial=True
+    )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    detail_serializer = DoctorProfileDetailSerializer(profile)
-    return Response(detail_serializer.data)
+    read_serializer = DoctorOwnProfileReadSerializer(profile)
+    return Response(read_serializer.data)
 
 
 # ── Doctor Dashboard Summary ────────────────────────────────────────────────
