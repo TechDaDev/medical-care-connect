@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import IsApprovedDoctor, IsDoctor
 from apps.consultations.models import Consultation
+from apps.core.security_events import doctor_profile_updated
 from apps.doctors.models import DoctorAvailability, DoctorProfile
 from apps.doctors.serializers import (
     DoctorAcceptingStatusSerializer,
@@ -62,8 +63,19 @@ def my_doctor_profile(request: Request) -> Response:
         profile, data=request.data, partial=True
     )
     serializer.is_valid(raise_exception=True)
-    serializer.save()
-    read_serializer = DoctorOwnProfileReadSerializer(profile)
+    updated_profile = serializer.save()
+    updated_profile.refresh_from_db()
+
+    # Audit changed field names (no values)
+    if serializer.validated_data:
+        changed_fields = list(serializer.validated_data.keys())
+        doctor_profile_updated(
+            user_id=str(request.user.id),
+            profile_id=str(updated_profile.id),
+            changed_fields=changed_fields,
+        )
+
+    read_serializer = DoctorOwnProfileReadSerializer(updated_profile)
     return Response(read_serializer.data)
 
 

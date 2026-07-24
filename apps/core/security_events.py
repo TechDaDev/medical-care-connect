@@ -108,6 +108,11 @@ def doctor_application_reviewed(user_id: str, profile_id: str, status: str, by_u
                 status=status, by_user=by_user)
 
 
+def doctor_profile_updated(user_id: str, profile_id: str, changed_fields: list[str]):
+    _safe_event("doctor.profile.updated", user_id=user_id, profile_id=profile_id,
+                changed_fields=",".join(changed_fields))
+
+
 # ── Data ──
 
 def data_export_requested(user_id: str):

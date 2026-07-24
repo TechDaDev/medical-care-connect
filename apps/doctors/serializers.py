@@ -1,3 +1,6 @@
+import json
+
+from django.db import transaction
 from rest_framework import serializers
 
 from apps.doctors.models import DoctorAvailability, DoctorProfile
@@ -59,6 +62,9 @@ class DoctorOwnProfileReadSerializer(serializers.ModelSerializer):
         return False
 
 
+ALLOWED_LANGUAGES = {"ar", "en", "ckb"}
+
+
 class DoctorOwnProfileUpdateSerializer(serializers.ModelSerializer):
     """Strict update serializer for doctor's own professional profile.
 
@@ -67,6 +73,8 @@ class DoctorOwnProfileUpdateSerializer(serializers.ModelSerializer):
     approval_note, is_accepting_consultations, medical_license_document)
     are deliberately absent so they cannot be set through this endpoint.
     """
+
+    languages = serializers.JSONField(required=False)
 
     class Meta:
         model = DoctorProfile
@@ -81,6 +89,59 @@ class DoctorOwnProfileUpdateSerializer(serializers.ModelSerializer):
             "languages",
             "estimated_response_minutes",
         ]
+
+    def validate_specialty(self, value):
+        from apps.specialties.models import Specialty
+
+        if not Specialty.objects.filter(id=value.id, is_active=True).exists():
+            raise serializers.ValidationError("Selected specialty is not available.")
+        return value
+
+    def validate_years_of_experience(self, value):
+        if value < 0 or value > 70:
+            raise serializers.ValidationError("Years of experience must be between 0 and 70.")
+        return value
+
+    def validate_consultation_fee(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Consultation fee cannot be negative.")
+        return value
+
+    def validate_languages(self, value):
+        if not isinstance(value, list) or len(value) < 1:
+            raise serializers.ValidationError("Provide at least one language.")
+        seen = set()
+        for lang in value:
+            if lang not in ALLOWED_LANGUAGES:
+                raise serializers.ValidationError(f"Unsupported language: {lang}")
+            if lang in seen:
+                raise serializers.ValidationError(f"Duplicate language: {lang}")
+            seen.add(lang)
+        return value
+
+    def validate_estimated_response_minutes(self, value):
+        if value < 1 or value > 1440:
+            raise serializers.ValidationError("Response time must be between 1 and 1440 minutes.")
+        return value
+
+    def validate(self, attrs):
+        """Reject unknown fields not in the allowed set."""
+        allowed = set(self.get_fields().keys())
+        incoming = set(self.initial_data.keys()) if hasattr(self, "initial_data") else set()
+        unknown = incoming - allowed
+        if unknown:
+            raise serializers.ValidationError(
+                {field: ["This field is not allowed."] for field in sorted(unknown)}
+            )
+        return attrs
+
+    def update(self, instance, validated_data):
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            instance.refresh_from_db()
+        return instance
 
 
 class DoctorProfileDetailSerializer(serializers.ModelSerializer):
