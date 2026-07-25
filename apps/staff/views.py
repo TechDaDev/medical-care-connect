@@ -132,10 +132,6 @@ def staff_dashboard(request: Request) -> Response:
         priority=Priority.URGENT,
     ).count()
 
-    unassigned = Consultation.objects.filter(
-        status=ConsultationStatus.SUBMITTED,
-    ).count()
-
     approved = DoctorProfile.objects.filter(
         is_approved=True, user__is_active=True
     ).count()
@@ -182,14 +178,13 @@ def staff_dashboard(request: Request) -> Response:
         status=AttachmentStatus.QUARANTINED
     ).count()
 
-    pending_notifications = Notification.objects.count()
+    total_notifications = Notification.objects.count()
 
     return Response({
         "consultations": {
             "total": Consultation.objects.count(),
             **status_counts,
             "urgent": urgent,
-            "unassigned": unassigned,
         },
         "doctors": {
             "total": total_doctors,
@@ -210,7 +205,9 @@ def staff_dashboard(request: Request) -> Response:
             "pending_deletions": pending_deletions,
             "pending_reports": pending_reports,
             "quarantined_attachments": quarantined_attachments,
-            "pending_notifications": pending_notifications,
+        },
+        "operations": {
+            "total_notifications": total_notifications,
         },
         "messages": {
             "unread_messages": total_unread,
