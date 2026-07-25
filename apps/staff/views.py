@@ -15,6 +15,8 @@ from apps.accounts.models import User, UserRole
 from apps.accounts.permissions import (
     IsCoordinatorOrAdministrator,
 )
+from apps.attachments.choices import AttachmentStatus
+from apps.attachments.models import ConsultationAttachment
 from apps.attachments.services.factory import get_storage_backend
 from apps.consultations.models import (
     Consultation,
@@ -134,9 +136,24 @@ def staff_dashboard(request: Request) -> Response:
         status=ConsultationStatus.SUBMITTED,
     ).count()
 
-    approved = DoctorProfile.objects.filter(is_approved=True).count()
+    approved = DoctorProfile.objects.filter(
+        is_approved=True, user__is_active=True
+    ).count()
+    pending = DoctorProfile.objects.filter(
+        approval_status=DoctorProfile.ApprovalStatus.PENDING
+    ).count()
+    rejected = DoctorProfile.objects.filter(
+        approval_status=DoctorProfile.ApprovalStatus.REJECTED
+    ).count()
+    suspended = DoctorProfile.objects.filter(
+        approval_status=DoctorProfile.ApprovalStatus.SUSPENDED
+    ).count()
+    total_doctors = DoctorProfile.objects.count()
     accepting = DoctorProfile.objects.filter(
-        is_approved=True, is_accepting_consultations=True
+        is_approved=True, is_accepting_consultations=True, user__is_active=True
+    ).count()
+    non_accepting = DoctorProfile.objects.filter(
+        is_approved=True, is_accepting_consultations=False, user__is_active=True
     ).count()
 
     total_unread = ConsultationMessage.objects.exclude(
@@ -145,8 +162,9 @@ def staff_dashboard(request: Request) -> Response:
 
     users_by_role = {}
     for r, _ in UserRole.choices:
-        users_by_role[r] = User.objects.filter(role=r).count()
-    total_users = sum(users_by_role.values())
+        users_by_role[r] = User.objects.filter(role=r, is_active=True).count()
+    total_users = User.objects.count()
+    inactive_users = User.objects.filter(is_active=False).count()
 
     pending_applications = DoctorProfile.objects.filter(
         approval_status=DoctorProfile.ApprovalStatus.PENDING
@@ -160,6 +178,12 @@ def staff_dashboard(request: Request) -> Response:
         resolved_at__isnull=True
     ).count()
 
+    quarantined_attachments = ConsultationAttachment.objects.filter(
+        status=AttachmentStatus.QUARANTINED
+    ).count()
+
+    pending_notifications = Notification.objects.count()
+
     return Response({
         "consultations": {
             "total": Consultation.objects.count(),
@@ -168,20 +192,29 @@ def staff_dashboard(request: Request) -> Response:
             "unassigned": unassigned,
         },
         "doctors": {
+            "total": total_doctors,
+            "pending": pending,
             "approved": approved,
+            "rejected": rejected,
+            "suspended": suspended,
             "accepting": accepting,
-            "non_accepting": approved - accepting,
+            "non_accepting": non_accepting,
         },
         "users": {
             "total": total_users,
             **users_by_role,
+            "inactive": inactive_users,
         },
         "queues": {
             "pending_applications": pending_applications,
             "pending_deletions": pending_deletions,
             "pending_reports": pending_reports,
+            "quarantined_attachments": quarantined_attachments,
+            "pending_notifications": pending_notifications,
         },
-        "unread_messages": total_unread,
+        "messages": {
+            "unread_messages": total_unread,
+        },
         "generated_at": timezone.now().isoformat(),
     })
 
