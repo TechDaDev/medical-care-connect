@@ -19,6 +19,7 @@ class NotificationType(models.TextChoices):
     REPORT_RESOLUTION = "report_resolution", _("Report Resolution")
     DOCTOR_APPLICATION = "doctor_application", _("Doctor Application")
     DOCTOR_APPLICATION_STATUS = "doctor_application_status", _("Doctor Application Status")
+    ACCOUNT_STATUS_CHANGE = "account_status_change", _("Account Status Change")
 
 
 class Notification(BaseModel):

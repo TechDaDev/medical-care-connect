@@ -113,6 +113,33 @@ def doctor_license_document_accessed(actor_id: str, profile_id: str, document_id
                 document_id=document_id)
 
 
+# ── Admin User Management ──
+
+def admin_user_deactivated(actor_id: str, target_id: str, reason_preview: str = ""):
+    _safe_event("admin.user.deactivated", actor_id=actor_id, target_id=target_id,
+                reason_preview=reason_preview)
+
+
+def admin_user_activated(actor_id: str, target_id: str, reason_preview: str = ""):
+    _safe_event("admin.user.activated", actor_id=actor_id, target_id=target_id,
+                reason_preview=reason_preview)
+
+
+def admin_user_sessions_revoked(actor_id: str, target_id: str, count: int = 0, reason_preview: str = ""):
+    _safe_event("admin.user.sessions_revoked", actor_id=actor_id, target_id=target_id,
+                count=count, reason_preview=reason_preview)
+
+
+def admin_user_role_changed(actor_id: str, target_id: str, old_role: str = "", new_role: str = "", reason_preview: str = ""):
+    _safe_event("admin.user.role_changed", actor_id=actor_id, target_id=target_id,
+                old_role=old_role, new_role=new_role, reason_preview=reason_preview)
+
+
+def admin_user_action_rejected(actor_id: str, target_id: str = "", reason: str = ""):
+    _safe_event("admin.user.action_rejected", actor_id=actor_id, target_id=target_id,
+                reason=reason)
+
+
 def doctor_profile_updated(user_id: str, profile_id: str, changed_fields: list[str]):
     _safe_event("doctor.profile.updated", user_id=user_id, profile_id=profile_id,
                 changed_fields=",".join(changed_fields))

@@ -1,4 +1,4 @@
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
 class LoginRateThrottle(AnonRateThrottle):
@@ -11,3 +11,8 @@ class RegisterRateThrottle(AnonRateThrottle):
 
 class RefreshRateThrottle(AnonRateThrottle):
     scope = "refresh"
+
+
+class AdminSensitiveWriteThrottle(UserRateThrottle):
+    """Stricter throttle for sensitive administrator actions."""
+    scope = "admin_sensitive_write"

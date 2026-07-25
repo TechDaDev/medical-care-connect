@@ -211,6 +211,7 @@ REST_FRAMEWORK = {
         "register": env("AUTH_REGISTER_RATE", default="5/hour"),
         "refresh": env("AUTH_REFRESH_RATE", default="30/min"),
         "ai_intake": env("AI_INTAKE_RATE", default="30/hour"),
+        "admin_sensitive_write": env("ADMIN_SENSITIVE_WRITE_RATE", default="60/min"),
     },
 }
 

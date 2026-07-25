@@ -3,7 +3,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -13,8 +13,10 @@ from django.http import FileResponse
 
 from apps.accounts.models import User, UserRole
 from apps.accounts.permissions import (
+    IsAdministrator,
     IsCoordinatorOrAdministrator,
 )
+from apps.accounts.throttles import AdminSensitiveWriteThrottle
 from apps.attachments.choices import AttachmentStatus
 from apps.attachments.models import ConsultationAttachment
 from apps.attachments.services.factory import get_storage_backend
@@ -65,6 +67,11 @@ class StaffPagination(PageNumberPagination):
 # ── Doctor Application Views ────────────────────────────────────────────────
 
 from apps.staff.serializers import (
+    AdminUserDetailSerializer,
+    AdminUserListSerializer,
+    AdminUserRoleSerializer,
+    AdminSessionRevocationSerializer,
+    AdminUserStatusSerializer,
     DoctorApplicationListSerializer,
     DoctorApplicationDetailSerializer,
     DoctorApplicationReviewSerializer,
@@ -671,3 +678,260 @@ def download_license_document(request: Request, profile_id: str) -> Response:
     if license_doc.declared_mime_type:
         response["Content-Type"] = license_doc.declared_mime_type
     return response
+
+
+# ── Admin User Management ────────────────────────────────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def admin_user_list(request: Request) -> Response:
+    """Paginated, filterable user list for administrators only."""
+    queryset = User.objects.prefetch_related(
+        "doctor_profile", "patient_profile"
+    ).only(
+        "id", "email", "first_name", "last_name", "role", "is_active",
+        "is_staff", "date_joined", "last_login",
+    )
+
+    # Role filter
+    role_f = request.query_params.get("role")
+    if role_f:
+        queryset = queryset.filter(role=role_f)
+
+    # Active filter
+    active_f = request.query_params.get("active")
+    if active_f is not None and active_f.lower() in ("true", "1"):
+        queryset = queryset.filter(is_active=True)
+    elif active_f is not None and active_f.lower() in ("false", "0"):
+        queryset = queryset.filter(is_active=False)
+
+    # Search
+    search = request.query_params.get("search")
+    if search:
+        queryset = queryset.filter(
+            Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(email__icontains=search)
+            | Q(id__icontains=search)
+        )
+
+    # Date filters
+    created_after = request.query_params.get("created_after")
+    if created_after:
+        queryset = queryset.filter(date_joined__gte=created_after)
+
+    created_before = request.query_params.get("created_before")
+    if created_before:
+        queryset = queryset.filter(date_joined__lte=created_before)
+
+    last_login_after = request.query_params.get("last_login_after")
+    if last_login_after:
+        queryset = queryset.filter(last_login__gte=last_login_after)
+
+    last_login_before = request.query_params.get("last_login_before")
+    if last_login_before:
+        queryset = queryset.filter(last_login__lte=last_login_before)
+
+    # Ordering
+    ordering = request.query_params.get("ordering", "-date_joined")
+    allowed_orderings = [
+        "date_joined", "-date_joined",
+        "last_login", "-last_login",
+        "email", "-email",
+        "role", "-role",
+        "is_active", "-is_active",
+        "first_name", "-first_name",
+    ]
+    if ordering not in allowed_orderings:
+        ordering = "-date_joined"
+    queryset = queryset.order_by(ordering)
+
+    paginator = StaffPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = AdminUserListSerializer(
+        page if page is not None else queryset, many=True,
+        context={"request": request},
+    )
+    if page is not None:
+        return paginator.get_paginated_response(serializer.data)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def admin_user_detail(request: Request, user_id: str) -> Response:
+    """Safe administrative detail view."""
+    user = get_object_or_404(
+        User.objects.prefetch_related("doctor_profile", "patient_profile"),
+        pk=user_id,
+    )
+    serializer = AdminUserDetailSerializer(
+        user, context={"request": request},
+    )
+    return Response(serializer.data)
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AdminSensitiveWriteThrottle])
+def admin_user_status(request: Request, user_id: str) -> Response:
+    """Activate or deactivate a user with safety checks."""
+    serializer = AdminUserStatusSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    is_active = serializer.validated_data["is_active"]
+    reason = serializer.validated_data["reason"]
+    expected_is_active = serializer.validated_data.get("expected_is_active")
+
+    from apps.accounts.services.admin_users import (
+        activate_user,
+        deactivate_user,
+        AdminUserError,
+        SelfActionForbidden,
+        FinalAdministratorProtected,
+        StateConflict,
+    )
+
+    try:
+        if is_active:
+            target = activate_user(
+                actor=request.user,
+                target_id=user_id,
+                reason=reason,
+                expected_active=expected_is_active,
+            )
+        else:
+            target = deactivate_user(
+                actor=request.user,
+                target_id=user_id,
+                reason=reason,
+                expected_active=expected_is_active,
+            )
+    except SelfActionForbidden:
+        return Response(
+            {"detail": "You cannot deactivate your own account.",
+             "code": "self_action_forbidden"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    except FinalAdministratorProtected:
+        return Response(
+            {"detail": "The final active administrator cannot be deactivated.",
+             "code": "final_administrator_protected"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    except StateConflict as e:
+        return Response(
+            {"detail": e.detail, "code": e.code},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    result = AdminUserDetailSerializer(
+        target, context={"request": request},
+    )
+    notification_title = "Activated" if is_active else "Deactivated"
+    return Response({
+        "detail": f"User {notification_title}.",
+        "user": result.data,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AdminSensitiveWriteThrottle])
+def admin_user_revoke_sessions(request: Request, user_id: str) -> Response:
+    """Revoke all outstanding sessions for a user."""
+    serializer = AdminSessionRevocationSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    reason = serializer.validated_data["reason"]
+
+    from apps.accounts.services.admin_users import (
+        revoke_sessions,
+        AdminUserError,
+        SelfActionForbidden,
+    )
+
+    try:
+        revoked, target = revoke_sessions(
+            actor=request.user,
+            target_id=user_id,
+            reason=reason,
+        )
+    except SelfActionForbidden:
+        return Response(
+            {"detail": "You cannot revoke sessions for your own account through this workflow.",
+             "code": "self_action_forbidden"},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    result = AdminUserDetailSerializer(
+        target, context={"request": request},
+    )
+    return Response({
+        "detail": f"{revoked} session(s) revoked.",
+        "revoked_sessions": revoked,
+        "user": result.data,
+    })
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AdminSensitiveWriteThrottle])
+def admin_user_role(request: Request, user_id: str) -> Response:
+    """Change a user's role with safety checks."""
+    serializer = AdminUserRoleSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    new_role = serializer.validated_data["role"]
+    reason = serializer.validated_data["reason"]
+    expected_role = serializer.validated_data.get("expected_role")
+
+    from apps.accounts.services.admin_users import (
+        change_user_role,
+        AdminUserError,
+        SelfActionForbidden,
+        FinalAdministratorProtected,
+        InvalidRoleTransition,
+        StateConflict,
+    )
+
+    try:
+        target = change_user_role(
+            actor=request.user,
+            target_id=user_id,
+            new_role=new_role,
+            reason=reason,
+            expected_role=expected_role,
+        )
+    except SelfActionForbidden:
+        return Response(
+            {"detail": "You cannot change your own role.",
+             "code": "self_action_forbidden"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    except FinalAdministratorProtected:
+        return Response(
+            {"detail": "The final active administrator cannot be demoted.",
+             "code": "final_administrator_protected"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    except InvalidRoleTransition:
+        return Response(
+            {"detail": "This role transition is not allowed.",
+             "code": "invalid_role_transition"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except StateConflict as e:
+        return Response(
+            {"detail": e.detail, "code": e.code},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    result = AdminUserDetailSerializer(
+        target, context={"request": request},
+    )
+    return Response({
+        "detail": "User role updated.",
+        "user": result.data,
+    })

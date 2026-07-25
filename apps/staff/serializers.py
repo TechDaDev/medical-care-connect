@@ -1,6 +1,7 @@
 """Serializers for staff endpoints."""
 from rest_framework import serializers
 
+from apps.accounts.models import User, UserRole
 from apps.consultations.models import Consultation, ConsultationStatus
 
 
@@ -212,3 +213,179 @@ class DoctorApplicationReviewSerializer(serializers.Serializer):
                     "Reason is required for this action."
                 )
         return value.strip() if value else ""
+
+
+# ── Admin User Management Serializers ────────────────────────────────────────
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Safe user list for administrators — no sensitive fields."""
+
+    full_name = serializers.CharField(read_only=True)
+    profile_type = serializers.SerializerMethodField()
+    doctor_approval_status = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id", "full_name", "email", "role", "is_active", "is_staff",
+            "date_joined", "last_login", "profile_type",
+            "doctor_approval_status", "available_actions",
+        ]
+
+    def get_profile_type(self, obj) -> str | None:
+        try:
+            if hasattr(obj, "doctor_profile") and obj.doctor_profile is not None:
+                return UserRole.DOCTOR
+        except Exception:
+            pass
+        try:
+            if hasattr(obj, "patient_profile") and obj.patient_profile is not None:
+                return UserRole.PATIENT
+        except Exception:
+            pass
+        return None
+
+    def get_doctor_approval_status(self, obj) -> str | None:
+        try:
+            if hasattr(obj, "doctor_profile") and obj.doctor_profile is not None:
+                return obj.doctor_profile.approval_status
+        except Exception:
+            pass
+        return None
+
+    def get_available_actions(self, obj) -> list[str]:
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            from apps.accounts.services.admin_users import get_available_actions
+            return get_available_actions(obj, request.user)
+        return []
+
+
+class AdminUserDetailSerializer(serializers.ModelSerializer):
+    """Safe administrative detail for a user."""
+
+    full_name = serializers.CharField(read_only=True)
+    profile_type = serializers.SerializerMethodField()
+    doctor_approval_status = serializers.SerializerMethodField()
+    has_patient_profile = serializers.SerializerMethodField()
+    has_doctor_profile = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
+    active_refresh_tokens = serializers.SerializerMethodField()
+    last_token_created_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id", "full_name", "email", "role", "is_active", "is_staff",
+            "is_superuser", "date_joined", "last_login",
+            "profile_type", "doctor_approval_status",
+            "has_patient_profile", "has_doctor_profile",
+            "available_actions",
+            "active_refresh_tokens", "last_token_created_at",
+        ]
+
+    def get_profile_type(self, obj) -> str | None:
+        try:
+            if hasattr(obj, "doctor_profile") and obj.doctor_profile is not None:
+                return UserRole.DOCTOR
+        except Exception:
+            pass
+        try:
+            if hasattr(obj, "patient_profile") and obj.patient_profile is not None:
+                return UserRole.PATIENT
+        except Exception:
+            pass
+        return None
+
+    def get_doctor_approval_status(self, obj) -> str | None:
+        try:
+            if hasattr(obj, "doctor_profile") and obj.doctor_profile is not None:
+                return obj.doctor_profile.approval_status
+        except Exception:
+            pass
+        return None
+
+    def get_has_patient_profile(self, obj) -> bool:
+        try:
+            return hasattr(obj, "patient_profile") and obj.patient_profile is not None
+        except Exception:
+            return False
+
+    def get_has_doctor_profile(self, obj) -> bool:
+        try:
+            return hasattr(obj, "doctor_profile") and obj.doctor_profile is not None
+        except Exception:
+            return False
+
+    def get_available_actions(self, obj) -> list[str]:
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            from apps.accounts.services.admin_users import get_available_actions
+            return get_available_actions(obj, request.user)
+        return []
+
+    def get_active_refresh_tokens(self, obj) -> int:
+        from rest_framework_simplejwt.tokens import OutstandingToken
+        return OutstandingToken.objects.filter(user=obj).count()
+
+    def get_last_token_created_at(self, obj) -> str | None:
+        from rest_framework_simplejwt.tokens import OutstandingToken
+        token = OutstandingToken.objects.filter(user=obj).order_by("-created_at").first()
+        if token:
+            return token.created_at.isoformat()
+        return None
+
+
+class AdminUserStatusSerializer(serializers.Serializer):
+    """Validate status change payload."""
+
+    is_active = serializers.BooleanField(required=True)
+    reason = serializers.CharField(
+        required=True, min_length=1, max_length=500,
+    )
+    expected_is_active = serializers.BooleanField(required=False, default=None)
+
+    def validate_reason(self, value):
+        stripped = value.strip()
+        if len(stripped) < 10:
+            raise serializers.ValidationError("Reason must be at least 10 characters.")
+        return stripped
+
+
+class AdminUserRoleSerializer(serializers.Serializer):
+    """Validate role change payload."""
+
+    role = serializers.ChoiceField(
+        choices=[UserRole.COORDINATOR, UserRole.ADMINISTRATOR],
+        required=True,
+    )
+    reason = serializers.CharField(
+        required=True, min_length=1, max_length=500,
+    )
+    expected_role = serializers.ChoiceField(
+        choices=[r for r, _ in UserRole.choices],
+        required=False,
+        default=None,
+    )
+
+    def validate_reason(self, value):
+        stripped = value.strip()
+        if len(stripped) < 10:
+            raise serializers.ValidationError("Reason must be at least 10 characters.")
+        return stripped
+
+
+class AdminSessionRevocationSerializer(serializers.Serializer):
+    """Validate session revocation payload."""
+
+    reason = serializers.CharField(
+        required=True, min_length=1, max_length=500,
+    )
+
+    def validate_reason(self, value):
+        stripped = value.strip()
+        if len(stripped) < 10:
+            raise serializers.ValidationError("Reason must be at least 10 characters.")
+        return stripped

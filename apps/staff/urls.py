@@ -34,4 +34,10 @@ urlpatterns = [
     path("reviews/reports/", staff_report_list, name="staff-report-list"),
     path("reviews/reports/<uuid:report_id>/resolve/", staff_resolve_report, name="staff-report-resolve"),
     path("doctors/applications/<uuid:profile_id>/license/", views.download_license_document, name="doctor-license-download"),
+    # Admin user management
+    path("users/", views.admin_user_list, name="admin-user-list"),
+    path("users/<uuid:user_id>/", views.admin_user_detail, name="admin-user-detail"),
+    path("users/<uuid:user_id>/status/", views.admin_user_status, name="admin-user-status"),
+    path("users/<uuid:user_id>/revoke-sessions/", views.admin_user_revoke_sessions, name="admin-user-revoke-sessions"),
+    path("users/<uuid:user_id>/role/", views.admin_user_role, name="admin-user-role"),
 ]
