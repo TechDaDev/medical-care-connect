@@ -11,33 +11,35 @@ from rest_framework.response import Response
 
 from django.http import FileResponse
 
-from apps.accounts.models import UserRole
+from apps.accounts.models import User, UserRole
 from apps.accounts.permissions import (
     IsCoordinatorOrAdministrator,
 )
 from apps.attachments.services.factory import get_storage_backend
-from apps.core.security_events import (
-    consultation_priority_changed,
-    consultation_transferred,
-)
 from apps.consultations.models import (
     Consultation,
     ConsultationPriorityChange,
     ConsultationStatus,
     ConsultationTransfer,
+    Priority,
+)
+from apps.core.security_events import (
+    consultation_priority_changed,
+    consultation_transferred,
+    doctor_application_reviewed,
 )
 from apps.doctors.models import DoctorProfile, LicenseDocument
 from apps.messaging.models import ConsultationMessage
 from apps.notifications.models import Notification, NotificationType
-from apps.notifications.services import create_notification
+from apps.notifications.services import create_notification, notify_doctor_application_status
+from apps.privacy.models import AccountDeletionRequest, DeletionStatus
+from apps.reviews.models import ReviewReport
 from apps.staff.serializers import (
     DoctorWorkloadSerializer,
     PriorityUpdateSerializer,
     StaffConsultationListSerializer,
     TransferConsultationSerializer,
 )
-from apps.core.security_events import doctor_application_reviewed
-from apps.notifications.services import notify_doctor_application_status
 
 _ACTIVE_STATUSES = (
     ConsultationStatus.SUBMITTED,
@@ -123,11 +125,12 @@ def staff_dashboard(request: Request) -> Response:
     for s in ConsultationStatus.values:
         status_counts[s] = Consultation.objects.filter(status=s).count()
 
-    urgent_count = Consultation.objects.filter(
+    urgent = Consultation.objects.filter(
         status__in=_ACTIVE_STATUSES,
+        priority=Priority.URGENT,
     ).count()
 
-    unassigned_count = Consultation.objects.filter(
+    unassigned = Consultation.objects.filter(
         status=ConsultationStatus.SUBMITTED,
     ).count()
 
@@ -135,27 +138,51 @@ def staff_dashboard(request: Request) -> Response:
     accepting = DoctorProfile.objects.filter(
         is_approved=True, is_accepting_consultations=True
     ).count()
-    not_accepting = approved - accepting
 
     total_unread = ConsultationMessage.objects.exclude(
         read_receipts__user=request.user
+    ).count()
+
+    users_by_role = {}
+    for r, _ in UserRole.choices:
+        users_by_role[r] = User.objects.filter(role=r).count()
+    total_users = sum(users_by_role.values())
+
+    pending_applications = DoctorProfile.objects.filter(
+        approval_status=DoctorProfile.ApprovalStatus.PENDING
+    ).count()
+
+    pending_deletions = AccountDeletionRequest.objects.exclude(
+        status__in=[DeletionStatus.COMPLETED, DeletionStatus.CANCELLED]
+    ).count()
+
+    pending_reports = ReviewReport.objects.filter(
+        resolved_at__isnull=True
     ).count()
 
     return Response({
         "consultations": {
             "total": Consultation.objects.count(),
             **status_counts,
+            "urgent": urgent,
+            "unassigned": unassigned,
         },
-        "urgent_count": urgent_count,
-        "unassigned_count": unassigned_count,
         "doctors": {
             "approved": approved,
             "accepting": accepting,
-            "not_accepting": not_accepting,
+            "non_accepting": approved - accepting,
         },
-        "messages": {
-            "unread_visible": total_unread,
+        "users": {
+            "total": total_users,
+            **users_by_role,
         },
+        "queues": {
+            "pending_applications": pending_applications,
+            "pending_deletions": pending_deletions,
+            "pending_reports": pending_reports,
+        },
+        "unread_messages": total_unread,
+        "generated_at": timezone.now().isoformat(),
     })
 
 
