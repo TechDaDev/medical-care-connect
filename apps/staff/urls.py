@@ -22,6 +22,7 @@ urlpatterns = [
     ),
     path("doctors/workload/", views.doctor_workload, name="doctor-workload"),
     path("doctors/applications/", views.doctor_application_list, name="doctor-application-list"),
+    path("doctors/applications/<uuid:profile_id>/", views.doctor_application_detail, name="doctor-application-detail"),
     path("doctors/applications/<uuid:profile_id>/review/", views.review_doctor_application, name="doctor-application-review"),
     path("operations/status/", operations_status, name="operations-status"),
     path("operations/metrics/", operations_metrics, name="operations-metrics"),

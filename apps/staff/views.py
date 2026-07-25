@@ -29,6 +29,7 @@ from apps.core.security_events import (
     consultation_priority_changed,
     consultation_transferred,
     doctor_application_reviewed,
+    doctor_license_document_accessed,
 )
 from apps.doctors.models import DoctorProfile, LicenseDocument
 from apps.messaging.models import ConsultationMessage
@@ -61,59 +62,174 @@ class StaffPagination(PageNumberPagination):
     max_page_size = 100
 
 
+# ── Doctor Application Views ────────────────────────────────────────────────
+
+from apps.staff.serializers import (
+    DoctorApplicationListSerializer,
+    DoctorApplicationDetailSerializer,
+    DoctorApplicationReviewSerializer,
+    get_available_actions,
+)
+from django.contrib.contenttypes.models import ContentType
+from apps.notifications.models import NotificationType
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
 def doctor_application_list(request: Request) -> Response:
-    """Authorized application queue. License data stays staff-only."""
-    queryset = DoctorProfile.objects.select_related("user", "specialty").filter(
-        approval_status=request.query_params.get("status", "pending")
-    ).order_by("created_at")
-    return Response([
-        {
-            "id": str(profile.id), "name": profile.user.full_name,
-            "specialty": profile.specialty.name if profile.specialty else None,
-            "years_of_experience": profile.years_of_experience,
-            "workplace_name": profile.workplace_name, "biography": profile.biography,
-            "license_number": profile.license_number, "approval_status": profile.approval_status,
-            "created_at": profile.created_at,
-        }
-        for profile in queryset
-    ])
+    """Paginated, filterable application queue. No full license number exposed."""
+    queryset = DoctorProfile.objects.select_related("user", "specialty").prefetch_related(
+        "license_document"
+    )
+
+    # Status filter
+    status_f = request.query_params.get("status")
+    if status_f:
+        queryset = queryset.filter(approval_status=status_f)
+
+    # Specialty filter
+    specialty = request.query_params.get("specialty")
+    if specialty:
+        queryset = queryset.filter(specialty_id=specialty)
+
+    # Date filters
+    created_after = request.query_params.get("created_after")
+    if created_after:
+        queryset = queryset.filter(created_at__gte=created_after)
+
+    created_before = request.query_params.get("created_before")
+    if created_before:
+        queryset = queryset.filter(created_at__lte=created_before)
+
+    # Search
+    search = request.query_params.get("search")
+    if search:
+        queryset = queryset.filter(
+            Q(user__first_name__icontains=search)
+            | Q(user__last_name__icontains=search)
+            | Q(professional_title__icontains=search)
+            | Q(workplace_name__icontains=search)
+        )
+
+    # Ordering
+    ordering = request.query_params.get("ordering", "created_at")
+    allowed_ordering = ["created_at", "-created_at", "updated_at", "-updated_at",
+                        "years_of_experience", "-years_of_experience",
+                        "approval_status", "-approval_status"]
+    if ordering not in allowed_ordering:
+        ordering = "created_at"
+    if not status_f:
+        # Default: pending first, then oldest
+        queryset = queryset.order_by("approval_status", ordering)
+    else:
+        queryset = queryset.order_by(ordering)
+
+    paginator = StaffPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = DoctorApplicationListSerializer(
+        page if page is not None else queryset, many=True
+    )
+    if page is not None:
+        return paginator.get_paginated_response(serializer.data)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
+def doctor_application_detail(request: Request, profile_id: str) -> Response:
+    """Full application detail with authorized fields and available actions."""
+    profile = get_object_or_404(
+        DoctorProfile.objects.select_related("user", "specialty").prefetch_related(
+            "license_document"
+        ),
+        pk=profile_id,
+    )
+    serializer = DoctorApplicationDetailSerializer(
+        profile, context={"request": request}
+    )
+    return Response(serializer.data)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
 def review_doctor_application(request: Request, profile_id: str) -> Response:
-    """Approve, reject, or suspend application; status remains server-owned."""
-    action = request.data.get("action")
+    """Approve, reject, suspend, or reactivate with concurrency protection."""
+    serializer = DoctorApplicationReviewSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    action = serializer.validated_data["action"]
+    reason = serializer.validated_data.get("reason", "")
+    expected_status = serializer.validated_data.get("expected_status")
+
     status_map = {
         "approve": DoctorProfile.ApprovalStatus.APPROVED,
         "reject": DoctorProfile.ApprovalStatus.REJECTED,
         "suspend": DoctorProfile.ApprovalStatus.SUSPENDED,
+        "reactivate": DoctorProfile.ApprovalStatus.APPROVED,
     }
-    if action not in status_map:
-        return Response({"detail": "Invalid review action."}, status=status.HTTP_400_BAD_REQUEST)
-    note = str(request.data.get("reason", "")).strip()
-    if len(note) > 500:
-        return Response({"detail": "Reason is too long."}, status=status.HTTP_400_BAD_REQUEST)
 
-    profile = get_object_or_404(DoctorProfile.objects.select_related("user"), pk=profile_id)
+    is_admin = request.user.role == UserRole.ADMINISTRATOR
     new_status = status_map[action]
+
+    profile = get_object_or_404(
+        DoctorProfile.objects.select_related("user"),
+        pk=profile_id,
+    )
+
     with transaction.atomic():
-        profile.approval_status = new_status
-        profile.is_approved = new_status == DoctorProfile.ApprovalStatus.APPROVED
-        if not profile.is_approved:
-            profile.is_accepting_consultations = False
-        profile.approval_note = note
-        profile.save(update_fields=[
+        locked = DoctorProfile.objects.select_for_update().get(pk=profile.id)
+
+        # Concurrency check
+        if expected_status and locked.approval_status != expected_status:
+            return Response(
+                {
+                    "detail": "The application was already reviewed by another staff member.",
+                    "code": "application_state_changed",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Validate transition
+        allowed = get_available_actions(locked, is_admin)
+        if action not in allowed:
+            return Response(
+                {
+                    "detail": "This status transition is not allowed.",
+                    "code": "invalid_status_transition",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        prev_status = locked.approval_status
+        locked.approval_status = new_status
+        locked.is_approved = new_status == DoctorProfile.ApprovalStatus.APPROVED
+        if action == "suspend":
+            locked.is_accepting_consultations = False
+        locked.approval_note = reason
+        locked.save(update_fields=[
             "approval_status", "is_approved", "is_accepting_consultations",
             "approval_note", "updated_at",
         ])
+
+        # Audit event
         doctor_application_reviewed(
-            str(profile.user_id), str(profile.id), new_status, str(request.user.id)
+            user_id=str(profile.user_id),
+            profile_id=str(profile.id),
+            status=new_status,
+            by_user=str(request.user.id),
         )
+
+        # Notification
         notify_doctor_application_status(profile)
-    return Response({"id": str(profile.id), "approval_status": profile.approval_status})
+
+    # Return full updated detail
+    detail = DoctorProfile.objects.select_related("user", "specialty").prefetch_related(
+        "license_document"
+    ).get(pk=profile.id)
+    detail_serializer = DoctorApplicationDetailSerializer(
+        detail, context={"request": request}
+    )
+    return Response(detail_serializer.data)
 
 
 # ── Staff Dashboard ─────────────────────────────────────────────────────────
@@ -503,9 +619,31 @@ def doctor_workload(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsCoordinatorOrAdministrator])
 def download_license_document(request: Request, profile_id: str) -> Response:
-    """Stream a doctor's license document to authorized staff only."""
+    """Stream a doctor's license document to authorized staff only.
+
+    Security: no storage path leaked, quarantined/rejected profiles denied,
+    safe headers set, audit event recorded.
+    """
     profile = get_object_or_404(DoctorProfile, id=profile_id)
+
+    # Deny access for quarantined/unavailable profiles
+    if profile.approval_status == DoctorProfile.ApprovalStatus.REJECTED:
+        return Response(
+            {"detail": "License document is not available for rejected applications.",
+             "code": "document_unavailable"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     license_doc = get_object_or_404(LicenseDocument, doctor_profile=profile)
+
+    # Deny quarantined documents
+    from apps.attachments.choices import ScanStatus
+    if license_doc.scan_status == ScanStatus.INFECTED:
+        return Response(
+            {"detail": "This document is quarantined and cannot be accessed.",
+             "code": "document_quarantined"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     backend = get_storage_backend()
     stream = backend.open(license_doc.storage_key)
@@ -514,4 +652,22 @@ def download_license_document(request: Request, profile_id: str) -> Response:
             {"detail": "License document not found on storage.", "code": "not_found"},
             status=status.HTTP_404_NOT_FOUND,
         )
-    return FileResponse(stream, filename=license_doc.original_filename, as_attachment=True)
+
+    # Audit event
+    doctor_license_document_accessed(
+        actor_id=str(request.user.id),
+        profile_id=str(profile.id),
+        document_id=str(license_doc.id),
+    )
+
+    # Sanitize filename
+    safe_name = license_doc.original_filename.replace(" ", "_")
+    safe_name = "".join(c for c in safe_name if c.isalnum() or c in "._-")
+
+    response = FileResponse(stream, as_attachment=True)
+    response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    if license_doc.declared_mime_type:
+        response["Content-Type"] = license_doc.declared_mime_type
+    return response
