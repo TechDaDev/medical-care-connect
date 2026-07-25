@@ -82,8 +82,9 @@ def current_user(request: Request) -> Response:
 
     serializer = UpdateUserSerializer(request.user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(CurrentUserSerializer(request.user).data)
+    updated_user = serializer.save()
+    updated_user.refresh_from_db()
+    return Response(CurrentUserSerializer(updated_user).data)
 
 
 # ── Register ────────────────────────────────────────────────────────────────
