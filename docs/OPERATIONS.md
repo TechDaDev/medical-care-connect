@@ -133,7 +133,7 @@ GET /api/staff/operations/metrics/
     },
     "total_bytes": 10485760
   },
-  "notifications_pending": 15,
+  "notifications_total_in_app": 15,
   "retention_candidates": 3
 }
 ```

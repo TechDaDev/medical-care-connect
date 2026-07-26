@@ -9,6 +9,9 @@ class Specialty(BaseModel):
     """Medical specialty that a doctor can belong to."""
 
     name = models.CharField(_("name"), max_length=255, unique=True)
+    name_en = models.CharField(_("English name"), max_length=255, default="")
+    name_ar = models.CharField(_("Arabic name"), max_length=255, default="")
+    name_ckb = models.CharField(_("Kurdish Sorani name"), max_length=255, default="")
     slug = models.SlugField(
         _("slug"), max_length=255, unique=True, blank=True,
         help_text=_("Auto-generated from name if omitted."),
@@ -26,6 +29,8 @@ class Specialty(BaseModel):
         return self.name
 
     def save(self, *args, **kwargs):
+        if self.name_en:
+            self.name = self.name_en.strip()
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)

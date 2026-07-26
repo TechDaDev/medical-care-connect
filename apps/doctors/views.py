@@ -160,6 +160,7 @@ def public_doctor_list(request: Request) -> Response:
     ).filter(
         is_approved=True,
         user__is_active=True,
+        specialty__is_active=True,
     )
 
     specialty = request.query_params.get("specialty")
@@ -222,6 +223,7 @@ def public_doctor_detail(request: Request, pk: str) -> Response:
         pk=pk,
         is_approved=True,
         user__is_active=True,
+        specialty__is_active=True,
     )
     serializer = PublicDoctorDetailSerializer(profile)
     return Response(serializer.data)

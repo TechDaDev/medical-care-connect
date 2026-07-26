@@ -111,10 +111,9 @@ def operations_metrics(request):
             .values_list("size_bytes", flat=True)
         )
         total_users = User.objects.count()
-        pending_notifications = Notification.objects.count()
+        total_in_app_notifications = Notification.objects.count()
         retention_count = _get_retention_candidates()
     except Exception:
-        import traceback; traceback.print_exc()
         return Response({"error": "metrics_unavailable"}, status=503)
 
     return Response({
@@ -122,7 +121,7 @@ def operations_metrics(request):
         "users": {"total": total_users, **users_by_role},
         "consultations": consultations_by_status,
         "attachments": {"by_status": attachments_by_status, "total_bytes": total_bytes},
-        "notifications_pending": pending_notifications,
+        "notifications_total_in_app": total_in_app_notifications,
         "retention_candidates": retention_count,
         "backup": _backup_status(),
         "scanner": _scanner_status(),

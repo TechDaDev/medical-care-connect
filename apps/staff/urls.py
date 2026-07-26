@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.staff import views
+from apps.staff import phase_e_views
 from apps.core.views import operations_status, operations_metrics
 from apps.privacy.views import deletion_approve, deletion_reject
 from apps.reviews.views import staff_moderate_review, staff_review_list, staff_report_list, staff_resolve_report
@@ -48,4 +49,18 @@ urlpatterns = [
     path("audit-events/", views.audit_event_list, name="audit-event-list"),
     path("audit-events/<uuid:event_id>/", views.audit_event_detail, name="audit-event-detail"),
     path("audit-events/export.csv", views.audit_event_csv_export, name="audit-event-csv-export"),
+    # Phase E — Specialty Administration
+    path("specialties/", phase_e_views.specialty_admin_list_create, name="specialty-admin-list"),
+    path("specialties/reorder/", phase_e_views.specialty_admin_reorder, name="specialty-admin-reorder"),
+    path("specialties/<uuid:specialty_id>/", phase_e_views.specialty_admin_detail, name="specialty-admin-detail"),
+    path("specialties/<uuid:specialty_id>/activate/", phase_e_views.specialty_admin_activate, name="specialty-admin-activate"),
+    path("specialties/<uuid:specialty_id>/deactivate/", phase_e_views.specialty_admin_deactivate, name="specialty-admin-deactivate"),
+    # Phase E — Attachment Quarantine Administration
+    path("attachments/", phase_e_views.attachment_admin_list, name="attachment-admin-list"),
+    path("attachments/<uuid:attachment_id>/", phase_e_views.attachment_admin_detail, name="attachment-admin-detail"),
+    path("attachments/<uuid:attachment_id>/rescan/", phase_e_views.attachment_admin_rescan, name="attachment-admin-rescan"),
+    path("attachments/<uuid:attachment_id>/reject/", phase_e_views.attachment_admin_reject, name="attachment-admin-reject"),
+    path("attachments/<uuid:attachment_id>/release/", phase_e_views.attachment_admin_release, name="attachment-admin-release"),
+    path("attachments/<uuid:attachment_id>/delete/", phase_e_views.attachment_admin_retention_delete, name="attachment-admin-retention-delete"),
+    path("attachments/<uuid:attachment_id>/download/", phase_e_views.attachment_admin_download, name="attachment-admin-download"),
 ]

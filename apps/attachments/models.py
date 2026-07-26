@@ -90,6 +90,16 @@ class ConsultationAttachment(BaseModel):
     scan_completed_at = models.DateTimeField(
         _("scan completed at"), null=True, blank=True,
     )
+    quarantine_reason = models.CharField(
+        _("quarantine reason"), max_length=255, blank=True,
+    )
+    rejection_reason = models.CharField(
+        _("rejection reason"), max_length=500, blank=True,
+    )
+    storage_deleted_at = models.DateTimeField(
+        _("storage deleted at"), null=True, blank=True,
+        help_text=_("When retention processing removed underlying file bytes."),
+    )
     is_deleted = models.BooleanField(
         _("is deleted"), default=False, db_index=True,
     )

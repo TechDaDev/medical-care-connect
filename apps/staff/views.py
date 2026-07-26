@@ -43,6 +43,7 @@ from apps.notifications.models import Notification, NotificationType
 from apps.notifications.services import create_notification, notify_doctor_application_status
 from apps.privacy.models import AccountDeletionRequest, DeletionStatus
 from apps.reviews.models import ReviewReport
+from apps.specialties.models import Specialty
 from apps.staff.serializers import (
     DoctorWorkloadSerializer,
     PriorityUpdateSerializer,
@@ -309,6 +310,19 @@ def staff_dashboard(request: Request) -> Response:
     quarantined_attachments = ConsultationAttachment.objects.filter(
         status=AttachmentStatus.QUARANTINED
     ).count()
+    attachment_counts = {
+        state: ConsultationAttachment.objects.filter(status=state).count()
+        for state in (
+            AttachmentStatus.PENDING,
+            AttachmentStatus.QUARANTINED,
+            AttachmentStatus.REJECTED,
+        )
+    }
+    specialty_counts = {
+        "total": Specialty.objects.count(),
+        "active": Specialty.objects.filter(is_active=True).count(),
+        "inactive": Specialty.objects.filter(is_active=False).count(),
+    }
 
     total_notifications = Notification.objects.count()
 
@@ -341,11 +355,34 @@ def staff_dashboard(request: Request) -> Response:
         "operations": {
             "total_notifications": total_notifications,
         },
+        "specialties": specialty_counts,
+        "attachments": {
+            **attachment_counts,
+            "retention_eligible": _get_retention_eligible_attachment_count(),
+        },
         "messages": {
             "unread_messages": total_unread,
         },
         "generated_at": timezone.now().isoformat(),
     })
+
+
+def _get_retention_eligible_attachment_count() -> int:
+    from apps.attachments.services.retention import get_retention_cutoff
+
+    cutoff = get_retention_cutoff()
+    if cutoff is None:
+        return 0
+    return ConsultationAttachment.objects.filter(
+        status=AttachmentStatus.DELETED,
+        is_deleted=True,
+        deleted_at__lt=cutoff,
+        storage_deleted_at__isnull=True,
+        consultation__status__in=[
+            ConsultationStatus.COMPLETED,
+            ConsultationStatus.CANCELLED,
+        ],
+    ).count()
 
 
 # ── Staff Consultation List ─────────────────────────────────────────────────

@@ -87,7 +87,24 @@ class ConsultationCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "This doctor account is not active."
             )
+        if value.specialty_id and not value.specialty.is_active:
+            raise serializers.ValidationError(
+                "This doctor's specialty is not available for new consultations."
+            )
         return value
+
+    def validate(self, attrs):
+        doctor = attrs.get("doctor")
+        specialty = attrs.get("specialty")
+        if specialty and not specialty.is_active:
+            raise serializers.ValidationError(
+                {"specialty": "This specialty is not active."}
+            )
+        if doctor and specialty and doctor.specialty_id != specialty.id:
+            raise serializers.ValidationError(
+                {"specialty": "Specialty must match the selected doctor."}
+            )
+        return attrs
 
 
 class ConsultationCancelSerializer(serializers.Serializer):

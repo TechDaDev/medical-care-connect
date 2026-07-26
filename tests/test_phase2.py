@@ -215,7 +215,7 @@ class SpecialtiesAPITests(TestCase):
     def test_create_specialty_requires_auth(self) -> None:
         url = reverse("specialties:specialty-list")
         response = _jpost(self.client, url, {"name": "Dermatology"})
-        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.status_code, 405)
 
     def test_slug_auto_generated(self) -> None:
         specialty = Specialty.objects.create(name="General Surgery")

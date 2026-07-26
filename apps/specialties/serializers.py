@@ -11,6 +11,9 @@ class SpecialtySerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "name_en",
+            "name_ar",
+            "name_ckb",
             "slug",
             "description",
             "is_active",
@@ -18,7 +21,7 @@ class SpecialtySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "slug", "created_at", "updated_at"]
+        read_only_fields = ["id", "name", "slug", "created_at", "updated_at"]
 
 
 class SpecialtyListSerializer(serializers.ModelSerializer):
@@ -26,4 +29,7 @@ class SpecialtyListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Specialty
-        fields = ["id", "name", "slug", "description", "is_active", "display_order"]
+        fields = [
+            "id", "name", "name_en", "name_ar", "name_ckb", "slug",
+            "description", "is_active", "display_order",
+        ]
