@@ -22,5 +22,7 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"].update(
         "refresh": "10000/hour",
         "ai_intake": "10000/hour",
         "admin_sensitive_write": "10000/hour",
+        "privacy_sensitive_write": "10000/hour",
+        "audit_export": "10000/hour",
     }
 )

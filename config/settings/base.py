@@ -212,6 +212,8 @@ REST_FRAMEWORK = {
         "refresh": env("AUTH_REFRESH_RATE", default="30/min"),
         "ai_intake": env("AI_INTAKE_RATE", default="30/hour"),
         "admin_sensitive_write": env("ADMIN_SENSITIVE_WRITE_RATE", default="60/min"),
+        "privacy_sensitive_write": env("PRIVACY_SENSITIVE_WRITE_RATE", default="30/min"),
+        "audit_export": env("AUDIT_EXPORT_RATE", default="10/hour"),
     },
 }
 

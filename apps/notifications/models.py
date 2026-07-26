@@ -20,6 +20,9 @@ class NotificationType(models.TextChoices):
     DOCTOR_APPLICATION = "doctor_application", _("Doctor Application")
     DOCTOR_APPLICATION_STATUS = "doctor_application_status", _("Doctor Application Status")
     ACCOUNT_STATUS_CHANGE = "account_status_change", _("Account Status Change")
+    # Phase D — Privacy
+    PRIVACY_DELETION_APPROVED = "privacy_deletion_approved", _("Privacy Deletion Approved")
+    PRIVACY_DELETION_REJECTED = "privacy_deletion_rejected", _("Privacy Deletion Rejected")
 
 
 class Notification(BaseModel):

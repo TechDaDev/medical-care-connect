@@ -46,7 +46,24 @@ class AccountDeletionRequestSerializer(serializers.ModelSerializer):
 
 
 class AccountDeletionReviewSerializer(serializers.Serializer):
-    rejection_reason = serializers.CharField(required=False, allow_blank=True, default="")
+    action = serializers.ChoiceField(
+        choices=["approve", "reject"], required=False, default="approve"
+    )
+    rejection_reason = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=500
+    )
+    expected_status = serializers.CharField(required=False, default=None)
+
+    def validate_rejection_reason(self, value):
+        action = self.initial_data.get("action", "approve")
+        if action == "reject":
+            stripped = value.strip() if value else ""
+            if len(stripped) < 10:
+                raise serializers.ValidationError(
+                    "Reason must be at least 10 characters for rejection."
+                )
+            return stripped
+        return value
 
 
 class DeactivationSerializer(serializers.Serializer):

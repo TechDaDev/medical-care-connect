@@ -35,12 +35,13 @@ from django.contrib.auth import get_user_model, authenticate
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.authentication import CookieJWTAuthentication
 from apps.accounts.permissions import IsPatient, IsAdministrator
+from apps.accounts.throttles import AdminSensitiveWriteThrottle
 from apps.core.security_events import (
     data_export_requested, data_export_completed,
     account_deactivated,
@@ -251,35 +252,141 @@ def deletion_detail_cancel(request, id):
 @api_view(["POST"])
 @authentication_classes([CookieJWTAuthentication])
 @permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AdminSensitiveWriteThrottle])
 def deletion_approve(request, id):
+    from apps.core.audit_service import create_audit_event
+    from apps.core.models import AuditEventCategory, AuditEventSeverity, AuditEventResult, RetentionClass
+
     try:
         dr = AccountDeletionRequest.objects.get(id=id)
     except AccountDeletionRequest.DoesNotExist:
         return Response({"detail": "Not found.", "code": "not_found"}, status=404)
-    if dr.status != DeletionStatus.PENDING:
-        return Response({"detail": "Already reviewed.", "code": "conflict"}, status=409)
-    dr.status = DeletionStatus.APPROVED
-    dr.reviewed_at = timezone.now()
-    dr.reviewed_by = request.user
-    dr.save(update_fields=["status", "reviewed_at", "reviewed_by"])
-    return Response(AccountDeletionRequestSerializer(dr).data)
+
+    serializer = AccountDeletionReviewSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    with transaction.atomic():
+        locked = AccountDeletionRequest.objects.select_for_update().get(pk=dr.id)
+
+        if locked.status != DeletionStatus.PENDING:
+            return Response(
+                {"detail": "This privacy request can no longer be reviewed.",
+                 "code": "invalid_privacy_request_transition"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        expected_status = serializer.validated_data.get("expected_status")
+        if expected_status is not None and locked.status != expected_status:
+            return Response(
+                {"detail": "The request state changed concurrently.",
+                 "code": "request_state_changed"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        locked.status = DeletionStatus.APPROVED
+        locked.reviewed_at = timezone.now()
+        locked.reviewed_by = request.user
+        locked.rejection_reason = ""
+        locked.save(update_fields=["status", "reviewed_at", "reviewed_by", "rejection_reason"])
+
+        # Audit event
+        create_audit_event(
+            event_type="privacy.deletion.approved",
+            category=AuditEventCategory.PRIVACY,
+            severity=AuditEventSeverity.INFO,
+            result=AuditEventResult.SUCCESS,
+            actor_id=str(request.user.id),
+            actor_role=request.user.role,
+            target_type="AccountDeletionRequest",
+            target_id=str(locked.id),
+            summary=f"Deletion request {locked.id} approved for user {locked.subject_user_id}",
+            retention_class=RetentionClass.PRIVACY_DECISION,
+        )
+
+    # Notify requester
+    from apps.notifications.services import create_notification
+    from apps.notifications.models import NotificationType
+    try:
+        create_notification(
+            recipient=dr.subject_user,
+            notification_type=NotificationType.PRIVACY_DELETION_APPROVED,
+            title="Deletion Request Approved",
+            body="Your account deletion request has been approved.",
+        )
+    except Exception:
+        pass
+
+    return Response(AccountDeletionRequestSerializer(locked).data)
 
 
 @api_view(["POST"])
 @authentication_classes([CookieJWTAuthentication])
 @permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AdminSensitiveWriteThrottle])
 def deletion_reject(request, id):
+    from apps.core.audit_service import create_audit_event
+    from apps.core.models import AuditEventCategory, AuditEventSeverity, AuditEventResult, RetentionClass
+
     try:
         dr = AccountDeletionRequest.objects.get(id=id)
     except AccountDeletionRequest.DoesNotExist:
         return Response({"detail": "Not found.", "code": "not_found"}, status=404)
-    if dr.status != DeletionStatus.PENDING:
-        return Response({"detail": "Already reviewed.", "code": "conflict"}, status=409)
+
     serializer = AccountDeletionReviewSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    dr.status = DeletionStatus.REJECTED
-    dr.reviewed_at = timezone.now()
-    dr.reviewed_by = request.user
-    dr.rejection_reason = serializer.validated_data.get("rejection_reason", "")
-    dr.save(update_fields=["status", "reviewed_at", "reviewed_by", "rejection_reason"])
-    return Response(AccountDeletionRequestSerializer(dr).data)
+
+    reject_reason = serializer.validated_data.get("rejection_reason", "")
+    expected_status = serializer.validated_data.get("expected_status")
+
+    with transaction.atomic():
+        locked = AccountDeletionRequest.objects.select_for_update().get(pk=dr.id)
+
+        if locked.status != DeletionStatus.PENDING:
+            return Response(
+                {"detail": "This privacy request can no longer be reviewed.",
+                 "code": "invalid_privacy_request_transition"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if expected_status is not None and locked.status != expected_status:
+            return Response(
+                {"detail": "The request state changed concurrently.",
+                 "code": "request_state_changed"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        locked.status = DeletionStatus.REJECTED
+        locked.reviewed_at = timezone.now()
+        locked.reviewed_by = request.user
+        locked.rejection_reason = reject_reason
+        locked.save(update_fields=["status", "reviewed_at", "reviewed_by", "rejection_reason"])
+
+        # Audit event
+        create_audit_event(
+            event_type="privacy.deletion.rejected",
+            category=AuditEventCategory.PRIVACY,
+            severity=AuditEventSeverity.INFO,
+            result=AuditEventResult.DENIED,
+            actor_id=str(request.user.id),
+            actor_role=request.user.role,
+            target_type="AccountDeletionRequest",
+            target_id=str(locked.id),
+            summary=f"Deletion request {locked.id} rejected for user {locked.subject_user_id}",
+            metadata={"reason_present": bool(reject_reason)},
+            retention_class=RetentionClass.PRIVACY_DECISION,
+        )
+
+    # Notify requester
+    from apps.notifications.services import create_notification
+    from apps.notifications.models import NotificationType
+    try:
+        create_notification(
+            recipient=dr.subject_user,
+            notification_type=NotificationType.PRIVACY_DELETION_REJECTED,
+            title="Deletion Request Rejected",
+            body="Your account deletion request has been reviewed.",
+        )
+    except Exception:
+        pass
+
+    return Response(AccountDeletionRequestSerializer(locked).data)

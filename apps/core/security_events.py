@@ -155,6 +155,36 @@ def data_export_completed(export_id: str):
     _safe_event("data.export.completed", export_id=export_id)
 
 
+# ── Privacy Deletion ──
+
+def privacy_deletion_request_viewed(actor_id: str, request_id: str):
+    _safe_event("privacy.deletion.request_viewed", actor_id=actor_id, request_id=request_id)
+
+
+def privacy_deletion_request_approved(actor_id: str, target_id: str, request_id: str):
+    _safe_event("privacy.deletion.approved", actor_id=actor_id, target_id=target_id, request_id=request_id)
+
+
+def privacy_deletion_request_rejected(actor_id: str, target_id: str, request_id: str):
+    _safe_event("privacy.deletion.rejected", actor_id=actor_id, target_id=target_id, request_id=request_id)
+
+
+def privacy_deletion_execution_started(request_id: str):
+    _safe_event("privacy.deletion.execution_started", request_id=request_id)
+
+
+def privacy_deletion_execution_completed(request_id: str):
+    _safe_event("privacy.deletion.execution_completed", request_id=request_id)
+
+
+def privacy_deletion_execution_failed(request_id: str, failure_code: str = ""):
+    _safe_event("privacy.deletion.execution_failed", request_id=request_id, failure_code=failure_code)
+
+
+def privacy_audit_export_created(actor_id: str):
+    _safe_event("privacy.audit_export_created", actor_id=actor_id)
+
+
 # ── Operations ──
 
 def restore_executed(backup_type: str = ""):

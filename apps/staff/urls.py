@@ -40,4 +40,12 @@ urlpatterns = [
     path("users/<uuid:user_id>/status/", views.admin_user_status, name="admin-user-status"),
     path("users/<uuid:user_id>/revoke-sessions/", views.admin_user_revoke_sessions, name="admin-user-revoke-sessions"),
     path("users/<uuid:user_id>/role/", views.admin_user_role, name="admin-user-role"),
+    # Phase D — Privacy Deletion Admin
+    path("privacy/deletion-requests/", views.privacy_deletion_list, name="privacy-deletion-list"),
+    path("privacy/deletion-requests/<uuid:request_id>/", views.privacy_deletion_detail, name="privacy-deletion-detail"),
+    path("privacy/deletion-requests/<uuid:request_id>/review/", views.privacy_deletion_review, name="privacy-deletion-review"),
+    # Phase D — Audit Events
+    path("audit-events/", views.audit_event_list, name="audit-event-list"),
+    path("audit-events/<uuid:event_id>/", views.audit_event_detail, name="audit-event-detail"),
+    path("audit-events/export.csv", views.audit_event_csv_export, name="audit-event-csv-export"),
 ]

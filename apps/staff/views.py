@@ -16,7 +16,7 @@ from apps.accounts.permissions import (
     IsAdministrator,
     IsCoordinatorOrAdministrator,
 )
-from apps.accounts.throttles import AdminSensitiveWriteThrottle
+from apps.accounts.throttles import AdminSensitiveWriteThrottle, PrivacySensitiveWriteThrottle, AuditExportThrottle
 from apps.attachments.choices import AttachmentStatus
 from apps.attachments.models import ConsultationAttachment
 from apps.attachments.services.factory import get_storage_backend
@@ -27,12 +27,16 @@ from apps.consultations.models import (
     ConsultationTransfer,
     Priority,
 )
+from apps.core.models import AuditEvent, AuditEventCategory, AuditEventSeverity, AuditEventResult, RetentionClass
 from apps.core.security_events import (
     consultation_priority_changed,
     consultation_transferred,
     doctor_application_reviewed,
     doctor_license_document_accessed,
+    privacy_deletion_request_viewed,
+    privacy_audit_export_created,
 )
+from apps.core.audit_service import create_audit_event
 from apps.doctors.models import DoctorProfile, LicenseDocument
 from apps.messaging.models import ConsultationMessage
 from apps.notifications.models import Notification, NotificationType
@@ -44,6 +48,11 @@ from apps.staff.serializers import (
     PriorityUpdateSerializer,
     StaffConsultationListSerializer,
     TransferConsultationSerializer,
+    AdminPrivacyDeletionListSerializer,
+    AdminPrivacyDeletionDetailSerializer,
+    PrivacyDeletionReviewInputSerializer,
+    AuditEventListSerializer,
+    AuditEventDetailSerializer,
 )
 
 _ACTIVE_STATUSES = (
@@ -935,3 +944,419 @@ def admin_user_role(request: Request, user_id: str) -> Response:
         "detail": "User role updated.",
         "user": result.data,
     })
+
+
+# ── Privacy Deletion Admin Views ────────────────────────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def privacy_deletion_list(request: Request) -> Response:
+    """Administrator-only privacy deletion request queue."""
+    queryset = AccountDeletionRequest.objects.select_related(
+        "subject_user", "reviewed_by"
+    )
+
+    # Status filter
+    status_f = request.query_params.get("status")
+    if status_f:
+        queryset = queryset.filter(status=status_f)
+
+    # Requester role filter
+    requester_role = request.query_params.get("requester_role")
+    if requester_role:
+        queryset = queryset.filter(subject_user__role=requester_role)
+
+    # Date filters
+    created_after = request.query_params.get("created_after")
+    if created_after:
+        queryset = queryset.filter(requested_at__gte=created_after)
+
+    created_before = request.query_params.get("created_before")
+    if created_before:
+        queryset = queryset.filter(requested_at__lte=created_before)
+
+    decided_after = request.query_params.get("decided_after")
+    if decided_after:
+        queryset = queryset.filter(reviewed_at__gte=decided_after)
+
+    decided_before = request.query_params.get("decided_before")
+    if decided_before:
+        queryset = queryset.filter(reviewed_at__lte=decided_before)
+
+    # Search — safe fields only
+    search = request.query_params.get("search")
+    if search:
+        queryset = queryset.filter(
+            Q(id__icontains=search)
+            | Q(subject_user__first_name__icontains=search)
+            | Q(subject_user__last_name__icontains=search)
+            | Q(subject_user__email__icontains=search)
+            | Q(subject_user__id__icontains=search)
+        )
+
+    # Ordering
+    ordering = request.query_params.get("ordering", "-requested_at")
+    allowed_orderings = [
+        "requested_at", "-requested_at",
+        "reviewed_at", "-reviewed_at",
+        "completed_at", "-completed_at",
+        "status", "-status",
+    ]
+    if ordering not in allowed_orderings:
+        ordering = "-requested_at"
+    queryset = queryset.order_by(ordering)
+
+    paginator = StaffPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = AdminPrivacyDeletionListSerializer(
+        page if page is not None else queryset, many=True
+    )
+    if page is not None:
+        return paginator.get_paginated_response(serializer.data)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def privacy_deletion_detail(request: Request, request_id: str) -> Response:
+    """Administrator-only privacy deletion request detail."""
+    dr = get_object_or_404(
+        AccountDeletionRequest.objects.select_related("subject_user", "reviewed_by"),
+        pk=request_id,
+    )
+
+    privacy_deletion_request_viewed(
+        actor_id=str(request.user.id),
+        request_id=str(dr.id),
+    )
+
+    serializer = AdminPrivacyDeletionDetailSerializer(dr)
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([PrivacySensitiveWriteThrottle])
+def privacy_deletion_review(request: Request, request_id: str) -> Response:
+    """Administrator approve or reject a deletion request."""
+    serializer = PrivacyDeletionReviewInputSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    action = serializer.validated_data["action"]
+    reason = serializer.validated_data.get("reason", "")
+    expected_status = serializer.validated_data.get("expected_status")
+
+    try:
+        dr = AccountDeletionRequest.objects.get(id=request_id)
+    except AccountDeletionRequest.DoesNotExist:
+        return Response(
+            {"detail": "Not found.", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    with transaction.atomic():
+        locked = AccountDeletionRequest.objects.select_for_update().get(pk=dr.id)
+
+        if action == "approve":
+            if locked.status != DeletionStatus.PENDING:
+                return Response(
+                    {"detail": "This privacy request can no longer be reviewed.",
+                     "code": "invalid_privacy_request_transition"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if expected_status is not None and locked.status != expected_status:
+                return Response(
+                    {"detail": "The request state changed concurrently.",
+                     "code": "request_state_changed"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            locked.status = DeletionStatus.APPROVED
+            locked.reviewed_at = timezone.now()
+            locked.reviewed_by = request.user
+            locked.rejection_reason = ""
+            locked.save(update_fields=["status", "reviewed_at", "reviewed_by", "rejection_reason"])
+
+            create_audit_event(
+                event_type="privacy.deletion.approved",
+                category=AuditEventCategory.PRIVACY,
+                severity=AuditEventSeverity.INFO,
+                result=AuditEventResult.SUCCESS,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="AccountDeletionRequest",
+                target_id=str(locked.id),
+                summary=f"Deletion request {locked.id} approved",
+                retention_class=RetentionClass.PRIVACY_DECISION,
+            )
+
+            from apps.notifications.services import create_notification
+            from apps.notifications.models import NotificationType
+            try:
+                create_notification(
+                    recipient=locked.subject_user,
+                    notification_type=NotificationType.PRIVACY_DELETION_APPROVED,
+                    title="Deletion Request Approved",
+                    body="Your account deletion request has been approved.",
+                )
+            except Exception:
+                pass
+        else:
+            if locked.status != DeletionStatus.PENDING:
+                return Response(
+                    {"detail": "This privacy request can no longer be reviewed.",
+                     "code": "invalid_privacy_request_transition"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if expected_status is not None and locked.status != expected_status:
+                return Response(
+                    {"detail": "The request state changed concurrently.",
+                     "code": "request_state_changed"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            locked.status = DeletionStatus.REJECTED
+            locked.reviewed_at = timezone.now()
+            locked.reviewed_by = request.user
+            locked.rejection_reason = reason
+            locked.save(update_fields=["status", "reviewed_at", "reviewed_by", "rejection_reason"])
+
+            create_audit_event(
+                event_type="privacy.deletion.rejected",
+                category=AuditEventCategory.PRIVACY,
+                severity=AuditEventSeverity.INFO,
+                result=AuditEventResult.DENIED,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="AccountDeletionRequest",
+                target_id=str(locked.id),
+                summary=f"Deletion request {locked.id} rejected",
+                metadata={"reason_present": bool(reason)},
+                retention_class=RetentionClass.PRIVACY_DECISION,
+            )
+
+            from apps.notifications.services import create_notification
+            from apps.notifications.models import NotificationType
+            try:
+                create_notification(
+                    recipient=locked.subject_user,
+                    notification_type=NotificationType.PRIVACY_DELETION_REJECTED,
+                    title="Deletion Request Rejected",
+                    body="Your account deletion request has been reviewed.",
+                )
+            except Exception:
+                pass
+
+    detail = AccountDeletionRequest.objects.select_related(
+        "subject_user", "reviewed_by"
+    ).get(pk=request_id)
+    result_serializer = AdminPrivacyDeletionDetailSerializer(detail)
+    return Response(result_serializer.data)
+
+
+# ── Audit Event Views ───────────────────────────────────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def audit_event_list(request: Request) -> Response:
+    """Administrator-only audit event list with filters."""
+    queryset = AuditEvent.objects.all()
+
+    # Event type filter
+    event_type = request.query_params.get("event_type")
+    if event_type:
+        queryset = queryset.filter(event_type=event_type)
+
+    # Category filter
+    category = request.query_params.get("category")
+    if category:
+        queryset = queryset.filter(category=category)
+
+    # Severity filter
+    severity = request.query_params.get("severity")
+    if severity:
+        queryset = queryset.filter(severity=severity)
+
+    # Result filter
+    result = request.query_params.get("result")
+    if result:
+        queryset = queryset.filter(result=result)
+
+    # Actor filter
+    actor_id = request.query_params.get("actor_id")
+    if actor_id:
+        queryset = queryset.filter(actor_id=actor_id)
+
+    # Target filter
+    target_type = request.query_params.get("target_type")
+    if target_type:
+        queryset = queryset.filter(target_type=target_type)
+
+    target_id = request.query_params.get("target_id")
+    if target_id:
+        queryset = queryset.filter(target_id=target_id)
+
+    # Date filters
+    created_after = request.query_params.get("created_after")
+    if created_after:
+        queryset = queryset.filter(occurred_at__gte=created_after)
+
+    created_before = request.query_params.get("created_before")
+    if created_before:
+        queryset = queryset.filter(occurred_at__lte=created_before)
+
+    # Request ID filter
+    request_id = request.query_params.get("request_id")
+    if request_id:
+        queryset = queryset.filter(request_id__icontains=request_id)
+
+    # Search — safe fields only
+    search = request.query_params.get("search")
+    if search:
+        queryset = queryset.filter(
+            Q(event_type__icontains=search)
+            | Q(summary__icontains=search)
+            | Q(target_type__icontains=search)
+            | Q(target_id__icontains=search)
+        )
+
+    # Ordering
+    ordering = request.query_params.get("ordering", "-occurred_at")
+    allowed_orderings = [
+        "occurred_at", "-occurred_at",
+        "event_type", "-event_type",
+        "category", "-category",
+        "severity", "-severity",
+        "result", "-result",
+    ]
+    if ordering not in allowed_orderings:
+        ordering = "-occurred_at"
+    queryset = queryset.order_by(ordering)
+
+    paginator = StaffPagination()
+    paginator.page_size = 50
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = AuditEventListSerializer(
+        page if page is not None else queryset, many=True
+    )
+    if page is not None:
+        return paginator.get_paginated_response(serializer.data)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+def audit_event_detail(request: Request, event_id: str) -> Response:
+    """Administrator-only audit event detail."""
+    event = get_object_or_404(AuditEvent, pk=event_id)
+    serializer = AuditEventDetailSerializer(event)
+    return Response(serializer.data)
+
+
+def _sanitize_csv_value(value: str) -> str:
+    """Neutralize CSV formula injection."""
+    if not value:
+        return value
+    dangerous = ("=", "+", "-", "@")
+    if value.startswith(dangerous):
+        return "'" + value
+    return value
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdministrator])
+@throttle_classes([AuditExportThrottle])
+def audit_event_csv_export(request: Request) -> Response:
+    """Administrator-only sanitized CSV export of audit events."""
+    from django.http import HttpResponse
+    import csv
+    import io
+
+    max_rows = 10000
+    date_after = request.query_params.get("created_after")
+    date_before = request.query_params.get("created_before")
+
+    if not date_after and not date_before:
+        return Response(
+            {"detail": "Date range required for CSV export. Use created_after and/or created_before.",
+             "code": "date_range_required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    queryset = AuditEvent.objects.all().order_by("-occurred_at")
+
+    event_type = request.query_params.get("event_type")
+    if event_type:
+        queryset = queryset.filter(event_type=event_type)
+
+    category = request.query_params.get("category")
+    if category:
+        queryset = queryset.filter(category=category)
+
+    severity = request.query_params.get("severity")
+    if severity:
+        queryset = queryset.filter(severity=severity)
+
+    result = request.query_params.get("result")
+    if result:
+        queryset = queryset.filter(result=result)
+
+    actor_id = request.query_params.get("actor_id")
+    if actor_id:
+        queryset = queryset.filter(actor_id=actor_id)
+
+    if date_after:
+        queryset = queryset.filter(occurred_at__gte=date_after)
+
+    if date_before:
+        queryset = queryset.filter(occurred_at__lte=date_before)
+
+    if queryset.count() > max_rows:
+        queryset = queryset[:max_rows]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Event ID", "Timestamp", "Event Type", "Category", "Severity",
+        "Result", "Actor ID", "Actor Name", "Actor Role",
+        "Target Type", "Target ID", "Request ID", "Summary",
+    ])
+
+    for event in queryset.select_related():
+        actor_name = ""
+        actor_role = event.actor_role or ""
+        if event.actor_id:
+            from apps.accounts.models import User
+            try:
+                user = User.objects.get(id=event.actor_id)
+                actor_name = user.full_name
+            except User.DoesNotExist:
+                pass
+
+        writer.writerow([
+            _sanitize_csv_value(str(event.id)),
+            _sanitize_csv_value(event.occurred_at.isoformat()),
+            _sanitize_csv_value(event.event_type),
+            _sanitize_csv_value(event.category),
+            _sanitize_csv_value(event.severity),
+            _sanitize_csv_value(event.result),
+            _sanitize_csv_value(str(event.actor_id) if event.actor_id else ""),
+            _sanitize_csv_value(actor_name),
+            _sanitize_csv_value(actor_role),
+            _sanitize_csv_value(event.target_type),
+            _sanitize_csv_value(event.target_id),
+            _sanitize_csv_value(event.request_id),
+            _sanitize_csv_value(event.summary),
+        ])
+
+    csv_content = output.getvalue()
+    output.close()
+
+    # Audit the export
+    privacy_audit_export_created(actor_id=str(request.user.id))
+
+    response = HttpResponse(csv_content, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="audit-export.csv"'
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response

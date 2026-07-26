@@ -58,8 +58,9 @@ class DeletionStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     APPROVED = "approved", "Approved"
     REJECTED = "rejected", "Rejected"
-    SCHEDULED = "scheduled", "Scheduled"
+    PROCESSING = "processing", "Processing"
     COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
 
 
@@ -94,6 +95,7 @@ class AccountDeletionRequest(models.Model):
     scheduled_for = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.TextField(blank=True, default="")
+    failure_code = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         ordering = ["-requested_at"]

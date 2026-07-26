@@ -3,6 +3,8 @@ from rest_framework import serializers
 
 from apps.accounts.models import User, UserRole
 from apps.consultations.models import Consultation, ConsultationStatus
+from apps.core.models import AuditEvent
+from apps.privacy.models import AccountDeletionRequest, DeletionStatus
 
 
 class StaffConsultationListSerializer(serializers.ModelSerializer):
@@ -389,3 +391,221 @@ class AdminSessionRevocationSerializer(serializers.Serializer):
         if len(stripped) < 10:
             raise serializers.ValidationError("Reason must be at least 10 characters.")
         return stripped
+
+
+# ── Privacy Deletion Admin Serializers ──────────────────────────────────
+
+
+class AdminPrivacyDeletionRequesterSerializer(serializers.Serializer):
+    """Safe requester identity for privacy admin views."""
+
+    id = serializers.UUIDField(read_only=True)
+    full_name = serializers.CharField(read_only=True)
+    email = serializers.EmailField(read_only=True)
+    role = serializers.CharField(read_only=True)
+
+
+class AdminPrivacyDeletionListSerializer(serializers.ModelSerializer):
+    """Safe admin list view for deletion requests."""
+
+    requester = serializers.SerializerMethodField()
+    request_reason_summary = serializers.SerializerMethodField()
+    reviewed_by_info = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
+    related_data_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccountDeletionRequest
+        fields = [
+            "id", "requester", "status", "request_reason_summary",
+            "requested_at", "reviewed_at", "completed_at",
+            "reviewed_by_info", "available_actions", "related_data_summary",
+        ]
+        read_only_fields = fields
+
+    def get_requester(self, obj) -> dict:
+        user = obj.subject_user
+        return {
+            "id": str(user.id),
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role,
+        }
+
+    def get_request_reason_summary(self, obj) -> str | None:
+        if obj.reason and len(obj.reason) > 200:
+            return obj.reason[:200] + "..."
+        return obj.reason or None
+
+    def get_reviewed_by_info(self, obj) -> dict | None:
+        if obj.reviewed_by:
+            return {
+                "id": str(obj.reviewed_by.id),
+                "full_name": obj.reviewed_by.full_name,
+            }
+        return None
+
+    def get_available_actions(self, obj) -> list[str]:
+        if obj.status == DeletionStatus.PENDING:
+            return ["approve", "reject"]
+        return []
+
+    def get_related_data_summary(self, obj) -> dict:
+        from apps.consultations.models import Consultation
+        from apps.messaging.models import ConsultationMessage
+        from apps.attachments.models import ConsultationAttachment
+        from apps.notifications.models import Notification
+        return {
+            "consultations": Consultation.objects.filter(patient__user=obj.subject_user).count(),
+            "messages": ConsultationMessage.objects.filter(sender=obj.subject_user).count(),
+            "attachments": ConsultationAttachment.objects.filter(uploaded_by=obj.subject_user).count(),
+            "notifications": Notification.objects.filter(recipient=obj.subject_user).count(),
+        }
+
+
+class AdminPrivacyDeletionDetailSerializer(serializers.ModelSerializer):
+    """Safe admin detail view for deletion requests."""
+
+    requester = serializers.SerializerMethodField()
+    request_reason_summary = serializers.SerializerMethodField()
+    reviewed_by_info = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
+    related_data_summary = serializers.SerializerMethodField()
+    export_request = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccountDeletionRequest
+        fields = [
+            "id", "requester", "status", "request_reason_summary",
+            "requested_at", "reviewed_at", "completed_at",
+            "reviewed_by_info", "rejection_reason",
+            "available_actions", "related_data_summary",
+            "export_request", "failure_code",
+        ]
+        read_only_fields = fields
+
+    def get_requester(self, obj) -> dict:
+        user = obj.subject_user
+        return {
+            "id": str(user.id),
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role,
+        }
+
+    def get_request_reason_summary(self, obj) -> str | None:
+        return obj.reason or None
+
+    def get_reviewed_by_info(self, obj) -> dict | None:
+        if obj.reviewed_by:
+            return {
+                "id": str(obj.reviewed_by.id),
+                "full_name": obj.reviewed_by.full_name,
+            }
+        return None
+
+    def get_available_actions(self, obj) -> list[str]:
+        if obj.status == DeletionStatus.PENDING:
+            return ["approve", "reject"]
+        return []
+
+    def get_related_data_summary(self, obj) -> dict:
+        from apps.consultations.models import Consultation
+        from apps.messaging.models import ConsultationMessage
+        from apps.attachments.models import ConsultationAttachment
+        from apps.notifications.models import Notification
+        return {
+            "consultations": Consultation.objects.filter(patient__user=obj.subject_user).count(),
+            "messages": ConsultationMessage.objects.filter(sender=obj.subject_user).count(),
+            "attachments": ConsultationAttachment.objects.filter(uploaded_by=obj.subject_user).count(),
+            "notifications": Notification.objects.filter(recipient=obj.subject_user).count(),
+        }
+
+    def get_export_request(self, obj) -> dict | None:
+        from apps.privacy.models import DataExportRequest, ExportStatus
+        export = DataExportRequest.objects.filter(
+            subject_user=obj.subject_user
+        ).order_by("-requested_at").first()
+        if not export:
+            return None
+        return {
+            "id": str(export.id),
+            "status": export.status,
+            "requested_at": export.requested_at.isoformat() if export.requested_at else None,
+            "completed_at": export.completed_at.isoformat() if export.completed_at else None,
+            "size_bytes": export.size_bytes,
+        }
+
+
+class PrivacyDeletionReviewInputSerializer(serializers.Serializer):
+    """Validate admin review action for deletion requests."""
+
+    action = serializers.ChoiceField(choices=["approve", "reject"], required=True)
+    reason = serializers.CharField(required=False, allow_blank=True, default="", max_length=500)
+    expected_status = serializers.CharField(required=False, default=None)
+
+    def validate_reason(self, value):
+        action = self.initial_data.get("action", "approve")
+        if action == "reject":
+            stripped = value.strip() if value else ""
+            if len(stripped) < 10:
+                raise serializers.ValidationError("Reason must be at least 10 characters for rejection.")
+            return stripped
+        return value
+
+
+# ── Audit Event Serializers ────────────────────────────────────────────
+
+
+class AuditEventListSerializer(serializers.ModelSerializer):
+    """Safe list view — no raw metadata."""
+
+    actor = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditEvent
+        fields = [
+            "id", "event_type", "category", "severity", "result",
+            "actor", "target_type", "target_id",
+            "request_id", "occurred_at", "summary",
+        ]
+
+    def get_actor(self, obj) -> dict | None:
+        if obj.actor_id:
+            from apps.accounts.models import User
+            try:
+                user = User.objects.get(id=obj.actor_id)
+                return {"id": str(user.id), "full_name": user.full_name, "role": user.role}
+            except User.DoesNotExist:
+                return {"id": str(obj.actor_id), "full_name": None, "role": obj.actor_role}
+        return None
+
+
+class AuditEventDetailSerializer(serializers.ModelSerializer):
+    """Safe detail view with sanitized metadata."""
+
+    actor = serializers.SerializerMethodField()
+    metadata_safe = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditEvent
+        fields = [
+            "id", "event_type", "category", "severity", "result",
+            "actor", "target_type", "target_id",
+            "request_id", "occurred_at", "summary",
+            "metadata_safe", "source", "retention_class",
+        ]
+
+    def get_actor(self, obj) -> dict | None:
+        if obj.actor_id:
+            from apps.accounts.models import User
+            try:
+                user = User.objects.get(id=obj.actor_id)
+                return {"id": str(user.id), "full_name": user.full_name, "role": user.role}
+            except User.DoesNotExist:
+                return {"id": str(obj.actor_id), "full_name": None, "role": obj.actor_role}
+        return None
+
+    def get_metadata_safe(self, obj) -> dict | None:
+        from apps.core.audit_service import _sanitize_metadata
+        return _sanitize_metadata(obj.metadata)
