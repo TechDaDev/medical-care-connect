@@ -4,6 +4,7 @@ Usage:
     python manage.py cleanup_phase11_e2e --run-id <id> [--execute]
 """
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
@@ -24,21 +25,21 @@ class Command(BaseCommand):
 
         if not run_id.isalnum() or len(run_id) > 32:
             raise CommandError("run-id must be alphanumeric, max 32 chars")
+        database_host = str(settings.DATABASES["default"].get("HOST", "")).lower()
+        if not settings.DEBUG or database_host not in {"", "localhost", "127.0.0.1", "db"}:
+            raise CommandError("Refusing E2E cleanup outside a local debug database.")
 
         suffix = f"-{run_id}@e2e.mcc.dev"
         qs = User.objects.filter(email__endswith=suffix)
+        user_count = qs.count()
 
         if not execute:
             self.stdout.write(self.style.WARNING("DRY RUN - add --execute to commit"))
-            self.stdout.write(f"Users to delete: {qs.count()}")
-            for u in qs:
-                self.stdout.write(f"  {u.email} (role={u.role})")
+            self.stdout.write(f"Users to delete: {user_count}")
             return
 
         with transaction.atomic():
-            for u in qs:
-                self.stdout.write(f"Deleting {u.email} (role={u.role})")
-                u.delete()
+            qs.delete()
 
             self.stdout.write(self.style.SUCCESS(f"Cleaned Phase 11 E2E data (run={run_id})"))
-            self.stdout.write(f"  Users deleted: {qs.count()}")
+            self.stdout.write(f"  Users deleted: {user_count}")

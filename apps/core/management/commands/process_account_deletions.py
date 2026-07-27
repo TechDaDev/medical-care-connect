@@ -51,7 +51,7 @@ class Command(BaseCommand):
 
             preview = anonymizer.preview(user)
 
-            self.stdout.write(f"\n  {req.id} — {user.email}")
+            self.stdout.write(f"\n  Request {req.id}")
             self.stdout.write(f"    Delete:   {', '.join(preview.to_delete) or 'none'}")
             self.stdout.write(f"    Anonymize: {', '.join(preview.to_anonymize) or 'none'}")
             self.stdout.write(f"    Retain:   {', '.join(preview.to_retain) or 'none'}")

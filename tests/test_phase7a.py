@@ -1,5 +1,7 @@
 """Phase 7A tests: integration hardening, staff APIs, dashboards, seed, errors."""
 
+from io import StringIO
+
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -80,6 +82,20 @@ class SeedCommandTests(TestCase):
         count_after = User.objects.count()
 
         self.assertEqual(count_before, count_after)
+
+    def test_seed_does_not_print_credentials(self):
+        from apps.core.management.commands.seed_development_data import (
+            SEED_PASSWORD,
+            _SEED_EMAILS,
+        )
+        from django.core.management import call_command
+
+        output = StringIO()
+        call_command("seed_development_data", force=True, stdout=output)
+
+        self.assertNotIn(SEED_PASSWORD, output.getvalue())
+        for email in _SEED_EMAILS.values():
+            self.assertNotIn(email, output.getvalue())
 
 
 # ── Test 2: Patient dashboard scoped ────────────────────────────────────────

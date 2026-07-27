@@ -38,18 +38,21 @@ def health(request):
 @authentication_classes([])
 @permission_classes([])
 def readiness(request):
-    """Check database + attachment backend."""
+    """Check dependencies required to safely serve requests."""
     db_ok = _check_database()
     storage_ok = _check_attachment_storage()
-    if not db_ok:
-        return Response({"status": "unhealthy", "database": False}, status=503)
+    scanner_mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
     scanner_ok = _check_scanner()
-    return Response({
-        "status": "ready",
+    scanner_required = scanner_mode == "clamav"
+    ready = db_ok and storage_ok and (scanner_ok or not scanner_required)
+    payload = {
+        "status": "ready" if ready else "unavailable",
         "database": db_ok,
         "attachment_storage": storage_ok,
         "scanner_available": scanner_ok,
-    })
+        "scanner_required": scanner_required,
+    }
+    return Response(payload, status=200 if ready else 503)
 
 
 # ── Operations: Status ──
@@ -61,6 +64,9 @@ def operations_status(request):
     """Safe operational state. Admin only."""
     db_ok = _check_database()
     storage_ok = _check_attachment_storage()
+    scanner = _scanner_status()
+    degraded = _degraded(db_ok, storage_ok, scanner)
+    notification_count = _get_notification_count() if db_ok else -1
     return Response({
         "version": getattr(settings, "APP_VERSION", "0.0.0"),
         "release": getattr(settings, "APP_RELEASE", ""),
@@ -71,11 +77,20 @@ def operations_status(request):
         "attachment_backend_provider": getattr(settings, "ATTACHMENT_STORAGE_BACKEND", "local"),
         "attachment_root_writable": storage_ok,
         "attachment_scan_mode": getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled"),
+        "scanner": scanner,
         "ai_enabled": getattr(settings, "AI_INTAKE_ENABLED", False),
         "error_monitor_provider": getattr(settings, "ERROR_MONITOR_PROVIDER", "disabled"),
         "latest_migration": _get_latest_migration() if db_ok else "",
         "retention_candidates": _get_retention_candidates() if db_ok else -1,
-        "degraded_components": _degraded(db_ok, storage_ok),
+        "notifications_total_in_app": notification_count,
+        "health_status": "healthy",
+        "readiness_status": "ready" if not degraded else "degraded",
+        "background_tasks": {
+            "configured": False,
+            "status": "not_configured",
+        },
+        "backup": _backup_status(),
+        "degraded_components": degraded,
     })
 
 
@@ -211,20 +226,30 @@ def _scanner_status() -> dict:
     return {
         "mode": mode,
         "available": available,
+        # No persistent scanner-check record exists. Do not invent one.
+        "last_successful_check": None,
+        "required": mode == "clamav",
     }
 
 
-def _degraded(db_ok: bool, storage_ok: bool) -> list:
+def _degraded(db_ok: bool, storage_ok: bool, scanner: dict | None = None) -> list:
     degraded = []
     if not db_ok:
         degraded.append("database")
     if not storage_ok:
         degraded.append("attachment_storage")
-    if not _check_scanner():
-        mode = getattr(settings, "ATTACHMENT_SCAN_MODE", "disabled")
-        if mode == "clamav":
-            degraded.append("scanner")
+    scanner = scanner or _scanner_status()
+    if scanner["required"] and not scanner["available"]:
+        degraded.append("scanner")
     return degraded
+
+
+def _get_notification_count() -> int:
+    try:
+        from apps.notifications.models import Notification
+        return Notification.objects.count()
+    except Exception:
+        return -1
 
 
 def _get_latest_migration() -> str:
@@ -234,12 +259,3 @@ def _get_latest_migration() -> str:
         return str(latest.name) if latest else ""
     except Exception:
         return ""
-
-
-def _degraded(db_ok: bool, storage_ok: bool) -> list:
-    d = []
-    if not db_ok:
-        d.append("database")
-    if not storage_ok:
-        d.append("attachment_storage")
-    return d

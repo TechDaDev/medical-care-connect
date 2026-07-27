@@ -110,6 +110,25 @@ class OperationsTests(TestCase):
         self.assertIn("database", data)
         self.assertTrue(data["database"])
 
+    @patch("apps.core.views._check_attachment_storage", return_value=False)
+    def test_readiness_fails_when_required_storage_unavailable(self, _storage):
+        resp = self.client.get("/api/readiness/")
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.json()["status"], "unavailable")
+
+    @override_settings(ATTACHMENT_SCAN_MODE="disabled")
+    @patch("apps.core.views._check_scanner", return_value=False)
+    def test_readiness_allows_disabled_optional_scanner(self, _scanner):
+        resp = self.client.get("/api/readiness/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.json()["scanner_required"])
+
+    @override_settings(ATTACHMENT_SCAN_MODE="clamav")
+    @patch("apps.core.views._check_scanner", return_value=False)
+    def test_readiness_fails_when_required_scanner_unavailable(self, _scanner):
+        resp = self.client.get("/api/readiness/")
+        self.assertEqual(resp.status_code, 503)
+
     def test_operations_status_requires_admin(self):
         # Anonymous
         resp = self.client.get("/api/staff/operations/status/")
@@ -128,6 +147,10 @@ class OperationsTests(TestCase):
         data = resp.json()
         self.assertIn("version", data)
         self.assertIn("database_available", data)
+        self.assertIn("readiness_status", data)
+        self.assertIn("notifications_total_in_app", data)
+        self.assertEqual(data["background_tasks"]["status"], "not_configured")
+        self.assertIsNone(data["scanner"]["last_successful_check"])
         self.assertNotIn("password", str(data))
         self.assertNotIn("hostname", str(data).lower())
 

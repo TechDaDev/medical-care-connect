@@ -327,13 +327,8 @@ class Command(BaseCommand):
 
     def _print_credentials(self):
         self.stdout.write("")
-        self.stdout.write(self.style.SUCCESS("=" * 60))
-        self.stdout.write(self.style.SUCCESS("  Development Accounts"))
-        self.stdout.write(self.style.SUCCESS("=" * 60))
-        self.stdout.write("")
-        self.stdout.write(f"  Password for all accounts: {SEED_PASSWORD}")
-        self.stdout.write("")
-        for label, email in _SEED_EMAILS.items():
-            self.stdout.write(f"  {label:20s} → {email}")
-        self.stdout.write("")
-        self.stdout.write(self.style.SUCCESS("=" * 60))
+        self.stdout.write(
+            self.style.SUCCESS(
+                "Development accounts seeded. Credentials are intentionally not printed."
+            )
+        )
