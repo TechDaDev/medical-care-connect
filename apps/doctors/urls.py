@@ -7,6 +7,7 @@ app_name = "doctors"
 urlpatterns = [
     # My profile (authenticated doctor)
     path("me/", views.my_doctor_profile, name="my-profile"),
+    path("me/access-state/", views.my_doctor_access_state, name="my-access-state"),
     path("me/dashboard/", views.my_doctor_dashboard, name="my-dashboard"),
     # My availability
     path("me/availability/", views.my_availability_list, name="my-availability-list"),

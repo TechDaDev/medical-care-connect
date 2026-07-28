@@ -12,6 +12,7 @@ from apps.ai_intake.models import AIIntakeSession
 from apps.attachments.models import ConsultationAttachment
 from apps.consultations.models import Consultation
 from apps.core.models import AuditEvent
+from apps.doctors.models import DoctorAvailability
 from apps.privacy.models import AccountDeletionRequest, DataExportRequest
 
 
@@ -33,7 +34,7 @@ class SyntheticFixtureTests(TestCase):
     def test_seed_and_cleanup_are_run_scoped(self):
         call_command("seed_e2e_data", run_id="phase-f-test")
         self.assertEqual(
-            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 11
+            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 13
         )
         self.assertEqual(
             Consultation.objects.filter(
@@ -55,6 +56,7 @@ class SyntheticFixtureTests(TestCase):
         )
         self.assertEqual(AIIntakeSession.objects.count(), 3)
         self.assertEqual(DataExportRequest.objects.count(), 3)
+        self.assertEqual(DoctorAvailability.objects.count(), 2)
         self.assertTrue(
             AuditEvent.objects.filter(request_id="e2e-phase-f-test").exists()
         )
@@ -68,6 +70,7 @@ class SyntheticFixtureTests(TestCase):
                 storage_key__startswith="e2e-phase-f-test/"
             ).exists()
         )
+        self.assertFalse(DoctorAvailability.objects.exists())
 
     @override_settings(DEBUG=False)
     @patch.dict(os.environ, {"E2E_TEST_PASSWORD": "synthetic-test-only"}, clear=False)

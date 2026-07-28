@@ -111,7 +111,10 @@ class DoctorAvailabilityTests(TestCase):
             role=UserRole.DOCTOR,
         )
         self.profile = DoctorProfile.objects.create(
-            user=self.user, is_approved=True, license_number="LIC-AVAIL",
+            user=self.user,
+            is_approved=True,
+            approval_status=DoctorProfile.ApprovalStatus.APPROVED,
+            license_number="LIC-AVAIL",
         )
         self.token = _login(self.client, "doctor@example.com", "pass123")
         self._auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
@@ -126,8 +129,8 @@ class DoctorAvailabilityTests(TestCase):
         self.assertEqual(resp.status_code, 201)
 
         resp = self.client.get(url, **self._auth)
-        self.assertEqual(len(resp.json()), 1)
-        self.assertEqual(resp.json()[0]["day_of_week"], "monday")
+        self.assertEqual(len(resp.json()["slots"]), 1)
+        self.assertEqual(resp.json()["slots"][0]["day_of_week"], "monday")
 
     def test_toggle_accepting_status(self):
         url = reverse("doctors:my-availability-status")

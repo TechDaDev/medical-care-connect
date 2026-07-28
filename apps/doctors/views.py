@@ -1,6 +1,10 @@
+from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, FloatField, Q
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
@@ -10,16 +14,26 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import IsApprovedDoctor, IsDoctor
 from apps.consultations.models import Consultation
+from apps.core.audit_service import create_audit_event
+from apps.core.models import AuditEventCategory
 from apps.core.security_events import doctor_profile_updated
 from apps.doctors.models import DoctorAvailability, DoctorProfile
 from apps.doctors.serializers import (
     DoctorAcceptingStatusSerializer,
+    DoctorAvailabilityMutationSerializer,
     DoctorAvailabilitySerializer,
     DoctorOwnProfileReadSerializer,
     DoctorOwnProfileUpdateSerializer,
     DoctorSearchQuerySerializer,
     PublicDoctorDetailSerializer,
     PublicDoctorListSerializer,
+)
+from apps.doctors.services import (
+    availability_overlaps,
+    availability_summary,
+    build_doctor_dashboard,
+    doctor_access_state,
+    stale_timestamp,
 )
 from apps.reviews.models import ReviewStatus
 
@@ -86,14 +100,10 @@ def my_doctor_profile(request: Request) -> Response:
 # ── Doctor Dashboard Summary ────────────────────────────────────────────────
 
 
-from apps.messaging.services import get_unread_message_counts
-from apps.notifications.models import Notification
-
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsApprovedDoctor])
 def my_doctor_dashboard(request: Request) -> Response:
-    """Dashboard summary for the authenticated doctor."""
+    """Bounded-query dashboard summary for the authenticated doctor."""
     profile = getattr(request.user, "doctor_profile", None)
     if profile is None:
         return Response(
@@ -101,45 +111,15 @@ def my_doctor_dashboard(request: Request) -> Response:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    consultations = Consultation.objects.filter(doctor=profile)
-    unread_messages = 0
-    for c in consultations:
-        counts = get_unread_message_counts(c, request.user)
-        unread_messages += counts["unread_count"]
+    return Response(build_doctor_dashboard(profile, request.user))
 
-    unread_notifications = Notification.objects.filter(
-        recipient=request.user, is_read=False
-    ).count()
 
-    return Response({
-        "consultations": {
-            "total_active": consultations.filter(
-                status__in=(
-                    "submitted", "accepted", "intake_in_progress",
-                    "intake_completed", "doctor_review",
-                    "awaiting_patient_response", "awaiting_doctor_response",
-                    "under_review", "follow_up_required", "physical_visit_required",
-                    "transferred",
-                ),
-            ).count(),
-            "submitted": consultations.filter(status="submitted").count(),
-            "accepted": consultations.filter(status="accepted").count(),
-            "intake_completed": consultations.filter(status="intake_completed").count(),
-            "doctor_review": consultations.filter(status="doctor_review").count(),
-            "awaiting_patient": consultations.filter(
-                status="awaiting_patient_response"
-            ).count(),
-            "awaiting_doctor": consultations.filter(
-                status="awaiting_doctor_response"
-            ).count(),
-        },
-        "unread_messages": unread_messages,
-        "unread_notifications": unread_notifications,
-        "profile": {
-            "is_approved": profile.is_approved,
-            "is_accepting_consultations": profile.is_accepting_consultations,
-        },
-    })
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsDoctor])
+def my_doctor_access_state(request: Request) -> Response:
+    """Authoritative routing/access state, including missing-profile doctors."""
+    profile = getattr(request.user, "doctor_profile", None)
+    return Response(doctor_access_state(request.user, profile))
 
 
 # ── Public Doctor Directory ─────────────────────────────────────────────────
@@ -308,12 +288,70 @@ def my_availability_list(request: Request) -> Response:
     if request.method == "GET":
         slots = DoctorAvailability.objects.filter(doctor=profile)
         serializer = DoctorAvailabilitySerializer(slots, many=True)
-        return Response(serializer.data)
+        return Response(
+            {
+                "timezone": settings.TIME_ZONE,
+                "is_accepting_consultations": profile.is_accepting_consultations,
+                "can_manage": True,
+                "slots": serializer.data,
+                "generated_at": timezone.now(),
+            }
+        )
 
-    serializer = DoctorAvailabilitySerializer(data=request.data)
+    serializer = DoctorAvailabilityMutationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    serializer.save(doctor=profile)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    values = dict(serializer.validated_data)
+    values.pop("expected_updated_at", None)
+    try:
+        with transaction.atomic():
+            locked_profile = DoctorProfile.objects.select_for_update().get(
+                pk=profile.pk
+            )
+            if DoctorAvailability.objects.filter(
+                doctor=locked_profile,
+                day_of_week=values["day_of_week"],
+                start_time=values["start_time"],
+                end_time=values["end_time"],
+            ).exists():
+                return Response(
+                    {"detail": "Availability slot already exists.", "code": "duplicate_availability"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if availability_overlaps(
+                profile=locked_profile,
+                day_of_week=values["day_of_week"],
+                start_time=values["start_time"],
+                end_time=values["end_time"],
+            ):
+                return Response(
+                    {"detail": "Availability overlaps an existing slot.", "code": "availability_overlap"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            slot = DoctorAvailability.objects.create(
+                doctor=locked_profile, **values
+            )
+            create_audit_event(
+                "doctor_availability_created",
+                AuditEventCategory.DOCTOR,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="doctor_availability",
+                target_id=str(slot.id),
+                summary="Doctor availability slot created.",
+                metadata={
+                    "profile_id": str(locked_profile.id),
+                    "changed_fields": sorted(values.keys()),
+                },
+            )
+    except IntegrityError:
+        return Response(
+            {"detail": "Availability slot already exists.", "code": "duplicate_availability"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return Response(
+        DoctorAvailabilitySerializer(slot).data,
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["PATCH", "DELETE"])
@@ -327,18 +365,125 @@ def my_availability_detail(request: Request, pk: str) -> Response:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    slot = get_object_or_404(
-        DoctorAvailability, pk=pk, doctor=profile
-    )
-
     if request.method == "DELETE":
-        slot.delete()
+        expected = request.query_params.get("expected_updated_at")
+        parsed_expected = parse_datetime(expected) if expected else None
+        if expected and parsed_expected is None:
+            return Response(
+                {"detail": "Invalid expected_updated_at.", "code": "invalid_timestamp"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            DoctorProfile.objects.select_for_update().get(pk=profile.pk)
+            try:
+                slot = DoctorAvailability.objects.select_for_update().get(
+                    pk=pk, doctor=profile
+                )
+            except DoctorAvailability.DoesNotExist:
+                return Response(
+                    {"detail": "Availability slot not found.", "code": "availability_not_found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if stale_timestamp(parsed_expected, slot.updated_at):
+                return Response(
+                    {"detail": "Availability slot changed.", "code": "stale_availability"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            slot_id = slot.id
+            slot.delete()
+            create_audit_event(
+                "doctor_availability_deleted",
+                AuditEventCategory.DOCTOR,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="doctor_availability",
+                target_id=str(slot_id),
+                summary="Doctor availability slot deleted.",
+                metadata={
+                    "changed_fields": ["deleted"],
+                    "profile_id": str(profile.id),
+                },
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    serializer = DoctorAvailabilitySerializer(slot, data=request.data, partial=True)
+    try:
+        slot = DoctorAvailability.objects.get(pk=pk, doctor=profile)
+    except DoctorAvailability.DoesNotExist:
+        return Response(
+            {"detail": "Availability slot not found.", "code": "availability_not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    serializer = DoctorAvailabilityMutationSerializer(
+        slot, data=request.data, partial=True
+    )
     serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
+    values = dict(serializer.validated_data)
+    expected = values.pop("expected_updated_at", None)
+    try:
+        with transaction.atomic():
+            DoctorProfile.objects.select_for_update().get(pk=profile.pk)
+            try:
+                locked_slot = DoctorAvailability.objects.select_for_update().get(
+                    pk=pk, doctor=profile
+                )
+            except DoctorAvailability.DoesNotExist:
+                return Response(
+                    {"detail": "Availability slot not found.", "code": "availability_not_found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if stale_timestamp(expected, locked_slot.updated_at):
+                return Response(
+                    {"detail": "Availability slot changed.", "code": "stale_availability"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            merged = {
+                "day_of_week": values.get("day_of_week", locked_slot.day_of_week),
+                "start_time": values.get("start_time", locked_slot.start_time),
+                "end_time": values.get("end_time", locked_slot.end_time),
+            }
+            if DoctorAvailability.objects.filter(
+                doctor=profile,
+                **merged,
+            ).exclude(id=locked_slot.id).exists():
+                return Response(
+                    {"detail": "Availability slot already exists.", "code": "duplicate_availability"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if availability_overlaps(
+                profile=profile, exclude_id=locked_slot.id, **merged
+            ):
+                return Response(
+                    {"detail": "Availability overlaps an existing slot.", "code": "availability_overlap"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            changed_fields = [
+                field
+                for field, value in values.items()
+                if getattr(locked_slot, field) != value
+            ]
+            for field, value in values.items():
+                setattr(locked_slot, field, value)
+            if changed_fields:
+                locked_slot.save(update_fields=changed_fields + ["updated_at"])
+                create_audit_event(
+                    "doctor_availability_updated",
+                    AuditEventCategory.DOCTOR,
+                    actor_id=str(request.user.id),
+                    actor_role=request.user.role,
+                    target_type="doctor_availability",
+                    target_id=str(locked_slot.id),
+                    summary="Doctor availability slot updated.",
+                    metadata={
+                        "profile_id": str(profile.id),
+                        "changed_fields": sorted(changed_fields),
+                    },
+                )
+    except IntegrityError:
+        return Response(
+            {"detail": "Availability slot already exists.", "code": "duplicate_availability"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return Response(DoctorAvailabilitySerializer(locked_slot).data)
 
 
 # ── Accepting Status ────────────────────────────────────────────────────────
@@ -348,7 +493,6 @@ def my_availability_detail(request: Request, pk: str) -> Response:
 @permission_classes([IsAuthenticated, IsApprovedDoctor])
 def update_accepting_status(request: Request) -> Response:
     """Toggle the doctor accepting-consultations flag."""
-    # Allow admins/coordinators to set for any doctor, or doctor to set own
     profile = getattr(request.user, "doctor_profile", None)
     if profile is None:
         return Response(
@@ -359,11 +503,44 @@ def update_accepting_status(request: Request) -> Response:
     serializer = DoctorAcceptingStatusSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
-    profile.is_accepting_consultations = serializer.validated_data[
-        "is_accepting_consultations"
-    ]
-    profile.save(update_fields=["is_accepting_consultations", "updated_at"])
+    desired = serializer.validated_data["is_accepting_consultations"]
+    expected = serializer.validated_data.get("expected_updated_at")
+    with transaction.atomic():
+        locked_profile = DoctorProfile.objects.select_for_update().get(
+            pk=profile.pk
+        )
+        if stale_timestamp(expected, locked_profile.updated_at):
+            return Response(
+                {"detail": "Accepting status changed.", "code": "stale_accepting_status"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        changed = locked_profile.is_accepting_consultations != desired
+        if changed:
+            previous = locked_profile.is_accepting_consultations
+            locked_profile.is_accepting_consultations = desired
+            locked_profile.save(
+                update_fields=["is_accepting_consultations", "updated_at"]
+            )
+            create_audit_event(
+                "doctor_accepting_status_updated",
+                AuditEventCategory.DOCTOR,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="doctor_profile",
+                target_id=str(locked_profile.id),
+                summary="Doctor accepting-consultations status updated.",
+                metadata={
+                    "changed_fields": ["is_accepting_consultations"],
+                    "previous": previous,
+                    "current": desired,
+                },
+            )
 
     return Response(
-        {"is_accepting_consultations": profile.is_accepting_consultations}
+        {
+            "changed": changed,
+            "reason": "updated" if changed else "accepting_status_unchanged",
+            "profile_updated_at": locked_profile.updated_at,
+            **availability_summary(locked_profile),
+        }
     )

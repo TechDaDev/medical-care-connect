@@ -366,27 +366,101 @@ class PublicDoctorDetailSerializer(PublicDoctorListSerializer):
 class DoctorAvailabilitySerializer(serializers.ModelSerializer):
     """Serializer for DoctorAvailability."""
 
-    day_of_week_display = serializers.CharField(
-        source="get_day_of_week_display", read_only=True
-    )
+    version = serializers.DateTimeField(source="updated_at", read_only=True)
 
     class Meta:
         model = DoctorAvailability
         fields = [
             "id",
-            "doctor",
             "day_of_week",
-            "day_of_week_display",
             "start_time",
             "end_time",
             "is_active",
-            "created_at",
             "updated_at",
+            "version",
         ]
-        read_only_fields = ["id", "doctor", "created_at", "updated_at"]
+        read_only_fields = ["id", "updated_at", "version"]
+
+    def validate(self, attrs):
+        allowed = {"day_of_week", "start_time", "end_time", "is_active"}
+        incoming = set(getattr(self, "initial_data", {}).keys())
+        unknown = incoming - allowed
+        if unknown:
+            raise serializers.ValidationError(
+                {field: ["field_not_allowed"] for field in sorted(unknown)}
+            )
+
+        start_time = attrs.get(
+            "start_time", getattr(self.instance, "start_time", None)
+        )
+        end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
+        if start_time is not None and end_time is not None:
+            if start_time == end_time:
+                raise serializers.ValidationError(
+                    {"end_time": ["invalid_time_range"]}
+                )
+            if start_time > end_time:
+                raise serializers.ValidationError(
+                    {"end_time": ["unsupported_cross_midnight"]}
+                )
+        return attrs
+
+
+class DoctorAvailabilityMutationSerializer(DoctorAvailabilitySerializer):
+    """Availability write payload with optional optimistic-concurrency value."""
+
+    expected_updated_at = serializers.DateTimeField(
+        required=False, write_only=True
+    )
+
+    class Meta(DoctorAvailabilitySerializer.Meta):
+        fields = DoctorAvailabilitySerializer.Meta.fields + [
+            "expected_updated_at"
+        ]
+
+    def validate(self, attrs):
+        expected = attrs.pop("expected_updated_at", None)
+        allowed = {
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "is_active",
+            "expected_updated_at",
+        }
+        incoming = set(getattr(self, "initial_data", {}).keys())
+        unknown = incoming - allowed
+        if unknown:
+            raise serializers.ValidationError(
+                {field: ["field_not_allowed"] for field in sorted(unknown)}
+            )
+        start_time = attrs.get(
+            "start_time", getattr(self.instance, "start_time", None)
+        )
+        end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
+        if start_time is not None and end_time is not None:
+            if start_time == end_time:
+                raise serializers.ValidationError(
+                    {"end_time": ["invalid_time_range"]}
+                )
+            if start_time > end_time:
+                raise serializers.ValidationError(
+                    {"end_time": ["unsupported_cross_midnight"]}
+                )
+        attrs["expected_updated_at"] = expected
+        return attrs
 
 
 class DoctorAcceptingStatusSerializer(serializers.Serializer):
     """Serializer for updating the doctor's accepting-consultations status."""
 
     is_accepting_consultations = serializers.BooleanField(required=True)
+    expected_updated_at = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        allowed = {"is_accepting_consultations", "expected_updated_at"}
+        unknown = set(getattr(self, "initial_data", {}).keys()) - allowed
+        if unknown:
+            raise serializers.ValidationError(
+                {field: ["field_not_allowed"] for field in sorted(unknown)}
+            )
+        return attrs

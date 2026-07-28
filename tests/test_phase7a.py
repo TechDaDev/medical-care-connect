@@ -50,6 +50,7 @@ def _create_doctor(user, specialty=None):
             "specialty": specialty,
             "license_number": f"LIC-{user.id.hex[:8]}",
             "is_approved": True,
+            "approval_status": DoctorProfile.ApprovalStatus.APPROVED,
             "is_accepting_consultations": True,
         },
     )[0]

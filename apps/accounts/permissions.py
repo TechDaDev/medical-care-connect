@@ -1,6 +1,7 @@
 from rest_framework.permissions import BasePermission
 
 from apps.accounts.models import UserRole
+from apps.doctors.models import DoctorProfile
 
 
 class IsPatient(BasePermission):
@@ -30,13 +31,27 @@ class IsApprovedDoctor(BasePermission):
 
     def has_permission(self, request, view):
         profile = getattr(request.user, "doctor_profile", None)
-        return bool(
+        allowed = bool(
             request.user
             and request.user.is_authenticated
+            and request.user.is_active
             and request.user.role == UserRole.DOCTOR
             and profile
             and profile.is_approved
+            and profile.approval_status == DoctorProfile.ApprovalStatus.APPROVED
         )
+        if not allowed:
+            if (
+                profile
+                and profile.approval_status
+                == DoctorProfile.ApprovalStatus.SUSPENDED
+            ):
+                self.message = "account_suspended"
+                self.code = "account_suspended"
+            else:
+                self.message = "approval_required"
+                self.code = "approval_required"
+        return allowed
 
 
 class IsCoordinator(BasePermission):

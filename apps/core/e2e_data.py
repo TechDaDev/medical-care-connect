@@ -31,7 +31,7 @@ from apps.core.models import (
     AuditEventResult,
     AuditEventSeverity,
 )
-from apps.doctors.models import DoctorProfile, LicenseDocument
+from apps.doctors.models import DoctorAvailability, DoctorProfile, LicenseDocument, Weekday
 from apps.messaging.models import ConsultationMessage, MessageReadReceipt, MessageType
 from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.notifications.models import Notification, NotificationType
@@ -135,7 +135,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
     )
 
     doctors: dict[str, DoctorProfile] = {}
-    for state in ("pending", "approved", "suspended", "unavailable"):
+    for state in ("pending", "approved", "rejected", "suspended", "unavailable"):
         doctor_user = _user(run_id, state, UserRole.DOCTOR, password)
         approval_status = (
             DoctorProfile.ApprovalStatus.APPROVED
@@ -148,7 +148,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             professional_title=f"Synthetic {state.title()} Doctor",
             license_number=f"{prefix}-{state}",
             approval_status=approval_status,
-            is_approved=state in {"approved", "suspended", "unavailable"},
+            is_approved=state in {"approved", "unavailable"},
             is_accepting_consultations=state == "approved",
             biography=f"{prefix} non-clinical fixture",
             qualifications=f"{prefix} synthetic qualification",
@@ -158,6 +158,21 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             estimated_response_minutes=45 if state == "approved" else 180,
             languages=["en", "ar", "ckb"],
         )
+    _user(run_id, "missing-profile", UserRole.DOCTOR, password)
+    DoctorAvailability.objects.create(
+        doctor=doctors["approved"],
+        day_of_week=Weekday.MONDAY,
+        start_time="09:00",
+        end_time="12:00",
+        is_active=True,
+    )
+    DoctorAvailability.objects.create(
+        doctor=doctors["approved"],
+        day_of_week=Weekday.WEDNESDAY,
+        start_time="13:00",
+        end_time="16:00",
+        is_active=False,
+    )
 
     consultations = []
     lifecycle_states = tuple(ConsultationStatus.values)
@@ -315,6 +330,13 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         consultation=submitted_consultation,
         related_message=unread_message,
     )
+    Notification.objects.create(
+        recipient=doctors["approved"].user,
+        notification_type=NotificationType.NEW_CONSULTATION,
+        title=f"{prefix} doctor dashboard notification",
+        body="Synthetic local doctor notification.",
+        consultation=submitted_consultation,
+    )
     AuditEvent.objects.create(
         event_type="e2e_fixture_seeded",
         category=AuditEventCategory.SYSTEM,
@@ -415,6 +437,11 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
         | Q(first_name="Synthetic", last_name__endswith=f" {run_id}")
     )
     user_ids = list(users.values_list("id", flat=True))
+    availability_ids = list(
+        DoctorAvailability.objects.filter(
+            doctor__user_id__in=user_ids
+        ).values_list("id", flat=True)
+    )
     consultations = Consultation.objects.filter(
         Q(description__startswith=prefix)
         | Q(patient__user_id__in=user_ids)
@@ -466,6 +493,9 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
         ).count(),
         "patient_profiles": PatientProfile.objects.filter(user_id__in=user_ids).count(),
         "doctor_profiles": DoctorProfile.objects.filter(user_id__in=user_ids).count(),
+        "availability_slots": DoctorAvailability.objects.filter(
+            id__in=availability_ids
+        ).count(),
         "consultations": Consultation.objects.filter(description__startswith=prefix).count(),
         "intake_sessions": AIIntakeSession.objects.filter(
             consultation_id__in=consultation_ids
