@@ -12,6 +12,7 @@ from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.medical_records.serializers import (
     MedicalRecordDraftSerializer,
     MedicalRecordDraftUpdateSerializer,
+    PatientMedicalRecordSerializer,
     RecordConfirmSerializer,
 )
 
@@ -49,7 +50,12 @@ def draft_record(request: Request, record_id) -> Response:
         )
 
     if request.method == "GET":
-        serializer = MedicalRecordDraftSerializer(record)
+        serializer_class = (
+            PatientMedicalRecordSerializer
+            if is_owner
+            else MedicalRecordDraftSerializer
+        )
+        serializer = serializer_class(record)
         return Response(serializer.data)
 
     # PATCH — doctor only, not on finalized records

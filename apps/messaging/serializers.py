@@ -10,21 +10,20 @@ from apps.messaging.services import (
 class MessageSerializer(serializers.ModelSerializer):
     """Serializes a consultation message."""
 
-    sender_email = serializers.EmailField(source="sender.email", read_only=True)
     sender_name = serializers.SerializerMethodField()
-    read_by = serializers.SerializerMethodField()
+    is_read_by_current_user = serializers.SerializerMethodField()
 
     class Meta:
         model = ConsultationMessage
         fields = [
-            "id", "consultation", "sender", "sender_email", "sender_name",
+            "id", "consultation", "sender", "sender_name",
             "message_type", "content", "is_system_message",
-            "sent_at", "edited_at", "read_by",
+            "sent_at", "edited_at", "is_read_by_current_user",
         ]
         read_only_fields = [
-            "id", "sender", "sender_email", "sender_name",
+            "id", "sender", "sender_name",
             "message_type", "is_system_message", "sent_at",
-            "edited_at", "read_by",
+            "edited_at", "is_read_by_current_user",
         ]
 
     def get_sender_name(self, obj) -> str:
@@ -32,18 +31,23 @@ class MessageSerializer(serializers.ModelSerializer):
             return "System"
         return obj.sender.full_name
 
-    def get_read_by(self, obj) -> list[dict]:
-        receipts = obj.read_receipts.select_related("user").all()
-        return [
-            {"user_id": r.user.id, "read_at": r.read_at}
-            for r in receipts
-        ]
+    def get_is_read_by_current_user(self, obj) -> bool:
+        request = self.context.get("request")
+        if not request:
+            return False
+        if obj.sender_id == request.user.id:
+            return True
+        return any(
+            receipt.user_id == request.user.id
+            for receipt in obj.read_receipts.all()
+        )
 
 
 class MessageCreateSerializer(serializers.Serializer):
     """Validates and creates a new message."""
 
-    content = serializers.CharField(max_length=5000, min_length=1)
+    content = serializers.CharField(max_length=5000, min_length=1, trim_whitespace=True)
+    client_request_id = serializers.UUIDField(required=False)
 
     def validate(self, attrs):
         consultation = self.context.get("consultation")
@@ -60,6 +64,7 @@ class MessageCreateSerializer(serializers.Serializer):
             consultation=consultation,
             sender=sender,
             content=self.validated_data["content"],
+            client_request_id=self.validated_data.get("client_request_id"),
         )
 
 

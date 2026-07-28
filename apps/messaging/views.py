@@ -1,10 +1,11 @@
-from django.db.models import QuerySet
+from django.db.models import Count, Q, QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsDoctor
@@ -64,15 +65,20 @@ def message_list_create(request: Request, consultation_pk: str) -> Response:
             .prefetch_related("read_receipts__user")
             .order_by("sent_at")
         )
-        # Mark messages as read for this user
         unread = messages.exclude(sender=request.user).exclude(
             read_receipts__user=request.user
         )
         if unread.exists():
             mark_messages_read(unread, request.user)
-
-        serializer = MessageSerializer(messages, many=True)
-        return Response(serializer.data)
+        paginator = PageNumberPagination()
+        paginator.page_size = 50
+        paginator.page_size_query_param = "page_size"
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(messages, request)
+        serializer = MessageSerializer(
+            page, many=True, context={"request": request}
+        )
+        return paginator.get_paginated_response(serializer.data)
 
     # POST
     serializer = MessageCreateSerializer(
@@ -85,7 +91,7 @@ def message_list_create(request: Request, consultation_pk: str) -> Response:
     # Notify other participant
     notify_new_message(message)
 
-    output = MessageSerializer(message)
+    output = MessageSerializer(message, context={"request": request})
     return Response(output.data, status=status.HTTP_201_CREATED)
 
 
@@ -106,7 +112,7 @@ def mark_messages_read_view(request: Request, consultation_pk: str) -> Response:
     messages = ConsultationMessage.objects.filter(
         consultation=consultation,
         id__in=serializer.validated_data["message_ids"],
-    )
+    ).exclude(sender=request.user)
     mark_messages_read(messages, request.user)
     return Response({"detail": "Messages marked as read."})
 
@@ -141,10 +147,22 @@ def unread_counts_all_view(request: Request) -> Response:
     elif user.role in (UserRole.COORDINATOR, UserRole.ADMINISTRATOR):
         consultations = Consultation.objects.all()
 
-    results = []
-    for c in consultations:
-        counts = get_unread_message_counts(c, user)
-        results.append({"consultation_id": c.id, "unread_count": counts["unread_count"]})
+    results = list(
+        consultations.annotate(
+            unread_count=Count(
+                "messages",
+                filter=(
+                    ~Q(messages__sender=user)
+                    & ~Q(messages__read_receipts__user=user)
+                ),
+                distinct=True,
+            )
+        ).values("id", "unread_count")
+    )
+    results = [
+        {"consultation_id": row["id"], "unread_count": row["unread_count"]}
+        for row in results
+    ]
     return Response(results)
 
 

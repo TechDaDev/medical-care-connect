@@ -8,6 +8,7 @@ class NotificationType(models.TextChoices):
     NEW_CONSULTATION = "new_consultation", _("New Consultation")
     NEW_MESSAGE = "new_message", _("New Message")
     CONSULTATION_ACCEPTED = "consultation_accepted", _("Consultation Accepted")
+    EMERGENCY_ESCALATED = "emergency_escalated", _("Emergency Escalated")
     CONSULTATION_CANCELLED = "consultation_cancelled", _("Consultation Cancelled")
     INTAKE_COMPLETED = "intake_completed", _("Intake Completed")
     RECORD_CONFIRMED = "record_confirmed", _("Record Confirmed")

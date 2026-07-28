@@ -104,11 +104,17 @@ class AIIntakeMessage(BaseModel):
     sequence_number = models.PositiveIntegerField(_("sequence number"))
     structured_data = models.JSONField(_("structured data"), null=True, blank=True)
     emergency_flags = models.JSONField(_("emergency flags"), default=list, blank=True)
+    client_request_id = models.UUIDField(
+        _("client request ID"), null=True, blank=True
+    )
 
     class Meta:
         verbose_name = _("AI intake message")
         verbose_name_plural = _("AI intake messages")
-        unique_together = [("session", "sequence_number")]
+        unique_together = [
+            ("session", "sequence_number"),
+            ("session", "client_request_id"),
+        ]
         ordering = ["sequence_number"]
 
     def __str__(self) -> str:

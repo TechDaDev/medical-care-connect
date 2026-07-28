@@ -36,6 +36,9 @@ class ConsultationMessage(BaseModel):
     is_system_message = models.BooleanField(_("is system message"), default=False)
     sent_at = models.DateTimeField(_("sent at"), auto_now_add=True, db_index=True)
     edited_at = models.DateTimeField(_("edited at"), null=True, blank=True)
+    client_request_id = models.UUIDField(
+        _("client request ID"), null=True, blank=True
+    )
 
     class Meta:
         verbose_name = _("consultation message")
@@ -45,6 +48,12 @@ class ConsultationMessage(BaseModel):
             models.Index(fields=["consultation", "sent_at"]),
             models.Index(fields=["sender", "sent_at"]),
             models.Index(fields=["message_type"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sender", "client_request_id"],
+                name="message_unique_sender_request_id",
+            ),
         ]
 
     def __str__(self) -> str:

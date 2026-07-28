@@ -205,8 +205,8 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "100/hour",
-        "user": "1000/hour",
+        "anon": env("API_ANON_RATE", default="100/hour"),
+        "user": env("API_USER_RATE", default="1000/hour"),
         "login": env("AUTH_LOGIN_RATE", default="10/min"),
         "register": env("AUTH_REGISTER_RATE", default="5/hour"),
         "refresh": env("AUTH_REFRESH_RATE", default="30/min"),

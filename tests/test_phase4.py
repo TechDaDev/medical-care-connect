@@ -114,7 +114,7 @@ class IntakeFlowTests(TestCase):
         )
         self.consultation = Consultation.objects.create(
             patient=self.patient, doctor=self.doc, specialty=self.spec,
-            status=ConsultationStatus.SUBMITTED,
+            status=ConsultationStatus.ACCEPTED,
         )
         self.token = _login(self.client, "patient@test.com", "pass123")
         self.headers = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}

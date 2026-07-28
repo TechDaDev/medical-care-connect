@@ -164,7 +164,24 @@ class ConsultationCreateResponseSerializer(serializers.ModelSerializer):
 class ConsultationCancelSerializer(serializers.Serializer):
     """Serializer for cancelling a consultation."""
 
-    cancellation_reason = serializers.CharField(required=True, min_length=1)
+    reason = serializers.CharField(
+        required=False, trim_whitespace=True, min_length=10, max_length=500
+    )
+    cancellation_reason = serializers.CharField(
+        required=False, trim_whitespace=True, min_length=10, max_length=500
+    )
+    expected_status = serializers.ChoiceField(
+        choices=ConsultationStatus.choices, required=False
+    )
+
+    def validate(self, attrs):
+        reason = attrs.get("reason") or attrs.get("cancellation_reason")
+        if not reason:
+            raise serializers.ValidationError(
+                {"reason": ["cancellation_reason_required"]}
+            )
+        attrs["reason"] = re.sub(r"\s+", " ", reason).strip()
+        return attrs
 
 
 class ConsultationDetailSerializer(serializers.ModelSerializer):
@@ -264,3 +281,213 @@ class ConsultationDetailSerializer(serializers.ModelSerializer):
             hasattr(obj, "medical_record")
             and obj.medical_record is not None
         )
+
+
+def _localized_specialty_name(specialty, request) -> str:
+    if specialty is None:
+        return ""
+    language = (
+        request.headers.get("Accept-Language", "en").split(",")[0].split("-")[0]
+        if request
+        else "en"
+    )
+    if language == "ar":
+        return specialty.name_ar or specialty.name
+    if language in {"ckb", "ku"}:
+        return specialty.name_ckb or specialty.name
+    return specialty.name_en or specialty.name
+
+
+class PatientConsultationListSerializer(serializers.ModelSerializer):
+    doctor = serializers.SerializerMethodField()
+    specialty = serializers.SerializerMethodField()
+    unread_messages = serializers.IntegerField(read_only=True, default=0)
+    needs_patient_action = serializers.SerializerMethodField()
+    has_active_intake = serializers.SerializerMethodField()
+    has_medical_record = serializers.SerializerMethodField()
+    has_review = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Consultation
+        fields = [
+            "id", "status", "priority", "doctor", "specialty", "created_at",
+            "updated_at", "submitted_at", "unread_messages",
+            "needs_patient_action", "has_active_intake", "has_medical_record",
+            "has_review", "available_actions",
+        ]
+        read_only_fields = fields
+
+    def get_doctor(self, obj):
+        if obj.doctor is None:
+            return None
+        specialty = obj.doctor.specialty
+        return {
+            "id": obj.doctor_id,
+            "full_name": obj.doctor.user.full_name,
+            "professional_title": obj.doctor.professional_title,
+            "specialty_name": _localized_specialty_name(
+                specialty, self.context.get("request")
+            ),
+        }
+
+    def get_specialty(self, obj):
+        if obj.specialty is None:
+            return None
+        return {
+            "id": obj.specialty_id,
+            "name": _localized_specialty_name(
+                obj.specialty, self.context.get("request")
+            ),
+        }
+
+    def _policy(self, obj):
+        from apps.consultations.patient_actions import patient_action_policy
+        return patient_action_policy(obj)
+
+    def get_needs_patient_action(self, obj):
+        actions = self._policy(obj).actions
+        return bool(
+            obj.status
+            in {
+                ConsultationStatus.AWAITING_PATIENT_RESPONSE,
+                ConsultationStatus.FOLLOW_UP_REQUIRED,
+                ConsultationStatus.PHYSICAL_VISIT_REQUIRED,
+                ConsultationStatus.EMERGENCY_ESCALATED,
+            }
+            or actions["can_continue_intake"]
+            or getattr(obj, "unread_messages", 0) > 0
+        )
+
+    def get_has_active_intake(self, obj):
+        intake = getattr(obj, "intake_session", None)
+        return bool(
+            intake
+            and intake.status in {"not_started", "in_progress", "awaiting_patient"}
+        )
+
+    def get_has_medical_record(self, obj):
+        return getattr(obj, "medical_record", None) is not None
+
+    def get_has_review(self, obj):
+        return getattr(obj, "review", None) is not None
+
+    def get_available_actions(self, obj):
+        return self._policy(obj).available_actions
+
+
+class PatientConsultationDetailSerializer(serializers.ModelSerializer):
+    doctor = serializers.SerializerMethodField()
+    specialty = serializers.SerializerMethodField()
+    timeline = serializers.SerializerMethodField()
+    actions = serializers.SerializerMethodField()
+    action_reasons = serializers.SerializerMethodField()
+    intake_summary = serializers.SerializerMethodField()
+    messages_summary = serializers.SerializerMethodField()
+    attachments_summary = serializers.SerializerMethodField()
+    medical_record_summary = serializers.SerializerMethodField()
+    review_summary = serializers.SerializerMethodField()
+    generated_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Consultation
+        fields = [
+            "id", "status", "priority", "doctor", "specialty", "description",
+            "created_at", "updated_at", "submitted_at", "accepted_at",
+            "cancelled_at", "cancellation_reason", "timeline", "actions",
+            "action_reasons", "intake_summary", "messages_summary",
+            "attachments_summary", "medical_record_summary", "review_summary",
+            "generated_at",
+        ]
+        read_only_fields = fields
+
+    def get_doctor(self, obj):
+        if obj.doctor is None:
+            return None
+        return {
+            "id": obj.doctor_id,
+            "full_name": obj.doctor.user.full_name,
+            "professional_title": obj.doctor.professional_title,
+            "specialty_name": _localized_specialty_name(
+                obj.doctor.specialty, self.context.get("request")
+            ),
+            "is_accepting_consultations": obj.doctor.is_accepting_consultations,
+        }
+
+    def get_specialty(self, obj):
+        if obj.specialty is None:
+            return None
+        return {
+            "id": obj.specialty_id,
+            "name": _localized_specialty_name(
+                obj.specialty, self.context.get("request")
+            ),
+        }
+
+    def _policy(self, obj):
+        from apps.consultations.patient_actions import patient_action_policy
+        return patient_action_policy(obj)
+
+    def get_timeline(self, obj):
+        from apps.consultations.timeline import build_patient_timeline
+        return build_patient_timeline(obj)
+
+    def get_actions(self, obj):
+        return self._policy(obj).actions
+
+    def get_action_reasons(self, obj):
+        return self._policy(obj).reasons
+
+    def get_intake_summary(self, obj):
+        intake = getattr(obj, "intake_session", None)
+        if intake is None:
+            return {
+                "exists": False, "status": None, "question_count": 0,
+                "is_complete": False, "emergency_detected": False,
+                "updated_at": None,
+            }
+        return {
+            "exists": True,
+            "status": intake.status,
+            "question_count": intake.question_count,
+            "is_complete": intake.status in {"ready_for_review", "confirmed"},
+            "emergency_detected": intake.emergency_detected,
+            "updated_at": intake.updated_at,
+        }
+
+    def get_messages_summary(self, obj):
+        messages = list(obj.messages.all())
+        return {
+            "unread_count": getattr(obj, "unread_messages", 0),
+            "last_message_at": messages[-1].sent_at if messages else None,
+        }
+
+    def get_attachments_summary(self, obj):
+        attachments = list(obj.attachments.all())
+        return {
+            "total": len(attachments),
+            "available": sum(a.status == "available" for a in attachments),
+            "pending_scan": sum(a.status == "pending" for a in attachments),
+            "quarantined": sum(a.status == "quarantined" for a in attachments),
+        }
+
+    def get_medical_record_summary(self, obj):
+        record = getattr(obj, "medical_record", None)
+        return {
+            "exists": record is not None,
+            "id": str(record.id) if record else None,
+            "status": record.status if record else None,
+            "updated_at": record.updated_at if record else None,
+        }
+
+    def get_review_summary(self, obj):
+        review = getattr(obj, "review", None)
+        return {
+            "exists": review is not None,
+            "status": review.status if review else None,
+            "can_edit": bool(review and review.status != "removed"),
+        }
+
+    def get_generated_at(self, obj):
+        from django.utils import timezone
+        return timezone.now()

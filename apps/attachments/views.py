@@ -107,10 +107,10 @@ def upload_attachment(request, consultation_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Patient: consultation must not be cancelled
+    # Patient: server-authoritative lifecycle policy controls upload.
     if user.role == UserRole.PATIENT:
-        from apps.consultations.models import ConsultationStatus as CS
-        if consultation.status in (CS.CANCELLED,):
+        from apps.consultations.patient_actions import patient_action_policy
+        if not patient_action_policy(consultation).actions["can_upload_attachment"]:
             return Response(
                 {"detail": "Cannot upload to a cancelled consultation.",
                  "code": "attachment_permission_denied"},
@@ -195,11 +195,11 @@ def upload_attachment(request, consultation_id):
     try:
         backend.save(uploaded_file, storage_key)
     except Exception as exc:
-        logger.error("Storage save failed for attachment %s: %s", attachment.id, exc)
+        logger.error("Storage save failed for attachment %s", attachment.id)
         attachment.status = AttachmentStatus.REJECTED
         attachment.save(update_fields=["status"])
         _audit(attachment, user, AttachmentEventType.STORAGE_ERROR,
-               {"error": str(exc)[:200]})
+               {"error": "storage_write_failed"})
         return Response(
             {"detail": "Storage error.", "code": "attachment_storage_error"},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -233,7 +233,7 @@ def upload_attachment(request, consultation_id):
             except Exception:
                 pass
     except Exception as exc:
-        logger.error("Scan failed for attachment %s: %s", attachment.id, exc)
+        logger.error("Scan failed for attachment %s", attachment.id)
         attachment.scan_status = ScanStatus.FAILED
         if scan_mode == "clamav":
             attachment.status = AttachmentStatus.QUARANTINED
@@ -362,8 +362,7 @@ def download_attachment(request, attachment_id):
     backend = get_storage_backend()
     file_obj = backend.open(attachment.storage_key)
     if file_obj is None:
-        logger.error("Storage object missing for attachment %s key=%s",
-                      attachment.id, attachment.storage_key)
+        logger.error("Storage object missing for attachment %s", attachment.id)
         return Response(
             {"detail": "Storage object not found.", "code": "attachment_storage_error"},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -302,7 +302,7 @@ class ActionFlagsTests(TestCase):
         resp = client.get(f"/api/consultations/{consultation.id}/")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("actions", resp.data)
-        self.assertFalse(resp.data["actions"]["can_accept"])
+        self.assertNotIn("can_accept", resp.data["actions"])
         self.assertTrue(resp.data["actions"]["can_cancel"])
 
         # Doctor view

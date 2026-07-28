@@ -211,7 +211,7 @@ class ConsultationTests(TestCase):
         # Patient sees own
         url = reverse("consultations:list")
         resp = self.client.get(url, **self._pat_auth)
-        self.assertEqual(len(resp.json()), 1)
+        self.assertEqual(len(resp.json()["results"]), 1)
         # Doctor sees assigned
         resp = self.client.get(url, **self._doc_auth)
         self.assertEqual(len(resp.json()), 1)

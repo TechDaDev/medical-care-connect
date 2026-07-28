@@ -75,13 +75,15 @@ def notify_new_message(message):
         participants.add(doctor_user)
 
     for user in participants:
-        create_notification(
+        Notification.objects.get_or_create(
             recipient=user,
             notification_type=NotificationType.NEW_MESSAGE,
-            title="New Message",
-            body=message.content[:200],
             consultation=consultation,
             related_message=message,
+            defaults={
+                "title": "New Message",
+                "body": "A new consultation message is available.",
+            },
         )
 
 
@@ -102,12 +104,14 @@ def notify_consultation_cancelled(consultation):
     doctor_user = consultation.doctor.user
 
     for user in (patient_user, doctor_user):
-        create_notification(
+        Notification.objects.get_or_create(
             recipient=user,
             notification_type=NotificationType.CONSULTATION_CANCELLED,
-            title="Consultation Cancelled",
-            body=f"Consultation cancelled. Reason: {consultation.cancellation_reason}",
             consultation=consultation,
+            defaults={
+                "title": "Consultation Cancelled",
+                "body": "Consultation status was updated.",
+            },
         )
 
 

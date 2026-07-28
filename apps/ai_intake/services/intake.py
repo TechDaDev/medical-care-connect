@@ -15,6 +15,7 @@ from apps.ai_intake.services.base import (
 )
 from apps.ai_intake.services.deepseek import DeepSeekProvider
 from apps.ai_intake.services.emergency import screen_patient_input
+from apps.consultations.models import ConsultationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,37 @@ COLLECTED_DATA_FIELDS = [
     "social_history",
     "additional_notes",
 ]
+
+
+def _escalate_consultation(session: AIIntakeSession) -> None:
+    consultation = session.consultation
+    if consultation.status == ConsultationStatus.EMERGENCY_ESCALATED:
+        return
+    consultation.status = ConsultationStatus.EMERGENCY_ESCALATED
+    consultation.save(update_fields=["status", "updated_at"])
+
+    from apps.core.audit_service import create_audit_event
+    from apps.core.models import AuditEventCategory
+    from apps.notifications.models import Notification, NotificationType
+
+    create_audit_event(
+        "patient_intake_emergency_escalated",
+        AuditEventCategory.CONSULTATION,
+        actor_id=str(consultation.patient.user_id),
+        actor_role="patient",
+        target_type="consultation",
+        target_id=str(consultation.id),
+        metadata={"level": session.emergency_level},
+    )
+    Notification.objects.get_or_create(
+        recipient=consultation.doctor.user,
+        notification_type=NotificationType.EMERGENCY_ESCALATED,
+        consultation=consultation,
+        defaults={
+            "title": "Consultation requires urgent review",
+            "body": "A consultation has entered emergency escalation.",
+        },
+    )
 
 
 def _get_provider():
@@ -62,16 +94,24 @@ def start_intake_session(consultation, language: str = "en") -> AIIntakeSession:
         collected_data={},
         missing_fields=list(COLLECTED_DATA_FIELDS),
     )
-    session, created = AIIntakeSession.objects.update_or_create(
+    session, created = AIIntakeSession.objects.get_or_create(
         consultation=consultation,
         defaults=defaults,
     )
+    if created or session.status in {"not_started", "failed"}:
+        for field, value in defaults.items():
+            setattr(session, field, value)
+        session.save()
+    if consultation.status == ConsultationStatus.ACCEPTED:
+        consultation.status = ConsultationStatus.INTAKE_IN_PROGRESS
+        consultation.save(update_fields=["status", "updated_at"])
     return session
 
 
 def process_intake_answer(
     session: AIIntakeSession,
     patient_message: str,
+    client_request_id=None,
 ) -> tuple[AIIntakeSession, dict]:
     """Process one patient answer.
 
@@ -91,6 +131,7 @@ def process_intake_answer(
         content=patient_message,
         sequence_number=AIIntakeMessage.objects.filter(session=session).count() + 1,
         emergency_flags=emergency if emergency["detected"] else [],
+        client_request_id=client_request_id,
     )
 
     if emergency["detected"]:
@@ -105,6 +146,7 @@ def process_intake_answer(
             "emergency_detected", "emergency_level", "emergency_reasons",
             "status", "started_at", "updated_at",
         ])
+        _escalate_consultation(session)
         # Return early — no AI call for flagged emergencies
         return session, _make_emergency_response(session, emergency)
 
@@ -150,11 +192,16 @@ def process_intake_answer(
         # Auto-generate medical record draft
         from apps.medical_records.services import generate_draft_from_intake
         generate_draft_from_intake(session)
+        session.consultation.status = ConsultationStatus.INTAKE_COMPLETED
+        session.consultation.save(update_fields=["status", "updated_at"])
+        from apps.notifications.services import notify_intake_completed
+        notify_intake_completed(session.consultation)
     elif validated.emergency_detected:
         session.status = "emergency_stopped"
         session.emergency_detected = True
         session.emergency_level = validated.emergency_level
         session.emergency_reasons = validated.emergency_reasons or []
+        _escalate_consultation(session)
 
     if not validated.next_question and validated.conversation_status == "needs_more_information":
         # Guard — never leave a live session without a next question

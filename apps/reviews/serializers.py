@@ -75,6 +75,14 @@ class ReviewSerializer(serializers.ModelSerializer):
             return str(_("Anonymous"))
         return obj.reviewer.user.full_name
 
+    def validate_body(self, value: str) -> str:
+        value = " ".join(value.split())
+        if value and len(value) < 10:
+            raise serializers.ValidationError("review_body_too_short")
+        if len(value) > 4000:
+            raise serializers.ValidationError("review_body_too_long")
+        return value
+
 
 class ReviewDetailSerializer(serializers.ModelSerializer):
     """Detailed review with response and report counts."""

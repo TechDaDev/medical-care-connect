@@ -34,18 +34,25 @@ def create_consultation_message(
     *,
     message_type: str = MessageType.TEXT,
     is_system_message: bool = False,
+    client_request_id=None,
 ) -> ConsultationMessage:
     """Create and return a new consultation message."""
     if not is_system_message and not consultation_allows_messaging(consultation):
         raise ValueError(
             f"Cannot send messages in status '{consultation.get_status_display()}'."
         )
+    if client_request_id is not None:
+        existing = ConsultationMessage.objects.filter(
+            sender=sender, client_request_id=client_request_id
+        ).first()
+        if existing:
+            if existing.consultation_id != consultation.id:
+                raise ValueError("client_request_id_conflict")
+            return existing
     return ConsultationMessage.objects.create(
-        consultation=consultation,
-        sender=sender,
-        message_type=message_type,
-        content=content,
-        is_system_message=is_system_message,
+        consultation=consultation, sender=sender, message_type=message_type,
+        content=content, is_system_message=is_system_message,
+        client_request_id=client_request_id,
     )
 
 
@@ -58,7 +65,7 @@ def mark_messages_read(messages, user) -> list[MessageReadReceipt]:
     )
     receipts = []
     for msg in messages:
-        if msg.id not in existing:
+        if msg.sender_id != user.id and msg.id not in existing:
             receipts.append(
                 MessageReadReceipt(message=msg, user=user, read_at=timezone.now())
             )

@@ -69,8 +69,8 @@ class Phase5MessagingTests(APITestCase):
         self._auth(self.doctor_user)
         resp = self.client.get(f"/api/messaging/{self.consultation.id}/messages/")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp.data), 1)
-        self.assertEqual(resp.data[0]["content"], "Hello Doctor")
+        self.assertEqual(len(resp.data["results"]), 1)
+        self.assertEqual(resp.data["results"][0]["content"], "Hello Doctor")
 
         # Verify read receipt exists for doctor
         self.assertTrue(
