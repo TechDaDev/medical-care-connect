@@ -23,7 +23,7 @@ canonical documentation.
 
 ## Local Acceptance Snapshot
 
-- Django: 378 passed, 0 failed, 2 skipped under SQLite. PostgreSQL concurrency
+- Django: 378 executed: 376 passed, 0 failed, 2 skipped under SQLite. PostgreSQL concurrency
   and backup dry-run retained skips each passed against real PostgreSQL.
 - Vitest: 144 passed, 0 failed, 0 skipped; coverage thresholds passed.
 - Playwright: 120 passed, 0 failed, 2 skipped. Both skips are desktop

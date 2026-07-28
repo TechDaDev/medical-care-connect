@@ -20,7 +20,7 @@
 
 ## Recorded Local Evidence
 
-- Backend: 378 passed, 0 failed, 2 skipped on default SQLite; both retained
+- Backend: 378 executed: 376 passed, 0 failed, 2 skipped on default SQLite; both retained
   skips passed separately against real PostgreSQL.
 - Frontend unit: 144 passed, 0 failed, 0 skipped across 7 files.
 - Playwright: 120 passed, 0 failed, 2 skipped across desktop and mobile.
