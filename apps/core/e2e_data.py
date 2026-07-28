@@ -135,6 +135,12 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         message_type=MessageType.TEXT,
         content=f"{prefix} synthetic message",
     )
+    incoming_message = ConsultationMessage.objects.create(
+        consultation=consultations[0],
+        sender=doctors["approved"].user,
+        message_type=MessageType.TEXT,
+        content=f"{prefix} synthetic incoming message",
+    )
     ConsultationReview.objects.create(
         consultation=consultations[-1],
         reviewer=patient,
@@ -160,6 +166,14 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         notification_type=NotificationType.STATUS_CHANGE,
         title=f"{prefix} in-app notification",
         body="Synthetic local acceptance notification.",
+    )
+    Notification.objects.create(
+        recipient=patient_user,
+        notification_type=NotificationType.NEW_MESSAGE,
+        title=f"{prefix} patient dashboard notification",
+        body="Synthetic local patient notification.",
+        consultation=consultations[0],
+        related_message=incoming_message,
     )
     AuditEvent.objects.create(
         event_type="e2e_fixture_seeded",

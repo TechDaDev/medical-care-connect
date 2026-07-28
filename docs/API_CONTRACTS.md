@@ -128,22 +128,83 @@ Editable: `date_of_birth`, `gender`, `preferred_language`, `address`, `emergency
     "active": 0,
     "awaiting_patient": 0,
     "awaiting_doctor": 0,
-    "completed": 0
+    "intake_in_progress": 0,
+    "doctor_review": 0,
+    "follow_up_required": 0,
+    "physical_visit_required": 0,
+    "emergency_escalated": 0,
+    "completed": 0,
+    "cancelled": 0
   },
-  "unread_messages": 0,
-  "unread_notifications": 0,
+  "attention": {
+    "total": 1,
+    "items": [
+      {
+        "type": "intake_incomplete",
+        "consultation_id": "consultation-uuid",
+        "title_key": "patientDashboard.attention.intake.title",
+        "description_key": "patientDashboard.attention.intake.description",
+        "count": 1,
+        "severity": "warning",
+        "created_at": "2026-07-28T10:00:00Z",
+        "action_path": "/app/patient/consultations/consultation-uuid/intake"
+      }
+    ]
+  },
+  "messages": {
+    "unread_total": 0,
+    "recent_threads": [
+      {
+        "consultation_id": "consultation-uuid",
+        "doctor_name": "Doctor Name",
+        "specialty_name": "Cardiology",
+        "unread_count": 0,
+        "last_message_at": "2026-07-28T10:00:00Z"
+      }
+    ]
+  },
+  "notifications": {
+    "unread_total": 0,
+    "recent": [
+      {
+        "id": "notification-uuid",
+        "notification_type": "message",
+        "title": "New message",
+        "body": "Open consultation to read it.",
+        "is_read": false,
+        "created_at": "2026-07-28T10:00:00Z",
+        "consultation_id": "consultation-uuid"
+      }
+    ]
+  },
+  "profile": {
+    "completion_percent": 80,
+    "missing_fields": ["blood_type"],
+    "emergency_contact_complete": true,
+    "basic_health_complete": false
+  },
   "recent_consultations": [
     {
       "id": "uuid",
       "status": "submitted",
-      "doctor_name": "...",
-      "specialty_name": "...",
-      "created_at": "...",
-      "updated_at": "..."
+      "doctor_name": "Doctor Name",
+      "specialty_name": "Cardiology",
+      "created_at": "2026-07-28T09:00:00Z",
+      "updated_at": "2026-07-28T10:00:00Z",
+      "unread_messages": 0,
+      "needs_patient_action": false,
+      "has_medical_record": false
     }
-  ]
+  ],
+  "generated_at": "2026-07-28T10:00:00Z"
 }
 ```
+
+Patient-only endpoint. Returns `401` for anonymous callers and `403` for other
+roles. Attention items derive from authoritative consultation, intake, and
+incoming-message state. Message content, patient notes, and medical-record
+content are excluded. Dashboard query count remains fixed as consultation
+volume grows.
 
 ---
 
@@ -581,4 +642,3 @@ Resolve a report.
 # Doctor registration
 
 `POST /api/auth/register/doctor/` accepts account fields plus `specialty`, `medical_license_number`, `years_of_experience`, `workplace_name`, `professional_bio`, and `languages`. It returns only safe user identity fields, pending application status, profile ID, and pending-approval next path. It never returns license numbers, passwords, or staff metadata.
-
