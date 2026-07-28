@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from decimal import Decimal
 
@@ -66,8 +67,8 @@ class CurrentUserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class UpdateUserSerializer(serializers.ModelSerializer):
-    """Serializer for partial updates to the current user's basic profile fields."""
+class PatientAccountUpdateSerializer(serializers.ModelSerializer):
+    """Explicit mutable account fields; identity and authorization stay server-owned."""
 
     class Meta:
         model = User
@@ -76,6 +77,27 @@ class UpdateUserSerializer(serializers.ModelSerializer):
             "last_name",
             "phone_number",
         ]
+
+    def _validate_name(self, value):
+        value = value.strip()
+        if len(value) < 2:
+            raise serializers.ValidationError("Enter at least 2 characters.")
+        if value.isdigit():
+            raise serializers.ValidationError("Name cannot contain only digits.")
+        return value
+
+    validate_first_name = _validate_name
+    validate_last_name = _validate_name
+
+    def validate_phone_number(self, value):
+        value = value.strip()
+        if value and not re.fullmatch(r"^\+?[0-9][0-9\s-]{5,19}$", value):
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return value.replace(" ", "").replace("-", "")
+
+
+class UpdateUserSerializer(PatientAccountUpdateSerializer):
+    """Backward-compatible name used by current-user endpoint."""
 
 
 class RegisterPatientSerializer(serializers.ModelSerializer):

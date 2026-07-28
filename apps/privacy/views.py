@@ -53,7 +53,7 @@ from apps.privacy.models import (
 from apps.privacy.serializers import (
     DataExportRequestSerializer, DataExportCreateSerializer,
     AccountDeletionRequestSerializer, AccountDeletionReviewSerializer,
-    DeactivationSerializer,
+    DeactivationSerializer, DeletionRequestCreateSerializer,
 )
 
 User = get_user_model()
@@ -69,11 +69,25 @@ def export_list_create(request):
     if request.method == "POST":
         serializer = DataExportCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        export = DataExportRequest.objects.create(
-            requested_by=request.user,
-            subject_user=request.user,
-            status=ExportStatus.PENDING,
-        )
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            active = DataExportRequest.objects.select_for_update().filter(
+                subject_user=request.user,
+                status__in=(ExportStatus.PENDING, ExportStatus.PROCESSING),
+            ).exists()
+            if active:
+                return Response(
+                    {
+                        "detail": "Active export request exists.",
+                        "code": "active_export_exists",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            export = DataExportRequest.objects.create(
+                requested_by=request.user,
+                subject_user=request.user,
+                status=ExportStatus.PENDING,
+            )
         data_export_requested(str(request.user.id))
         out = DataExportRequestSerializer(export).data
         return Response(out, status=status.HTTP_201_CREATED)
@@ -148,6 +162,9 @@ def export_download(request, id):
 
     response = Response(content, content_type="application/zip")
     response["Content-Disposition"] = f'attachment; filename="export-{export.id}.zip"'
+    response["Cache-Control"] = "private, no-store"
+    response["Pragma"] = "no-cache"
+    response["X-Content-Type-Options"] = "nosniff"
     return response
 
 
@@ -197,20 +214,49 @@ def reactivate_account(request):
 @permission_classes([IsAuthenticated])
 def deletion_list_create(request):
     if request.method == "POST":
-        reason = request.data.get("reason", "")
-        existing = AccountDeletionRequest.objects.filter(
-            subject_user=request.user,
-            status__in=(DeletionStatus.PENDING, DeletionStatus.APPROVED, DeletionStatus.SCHEDULED),
-        ).first()
-        if existing:
-            return Response(
-                {"detail": "Active deletion request exists.", "code": "conflict"},
-                status=409,
+        serializer = DeletionRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            existing = AccountDeletionRequest.objects.filter(
+                subject_user=request.user,
+                status__in=(
+                    DeletionStatus.PENDING,
+                    DeletionStatus.APPROVED,
+                    DeletionStatus.PROCESSING,
+                ),
+            ).exists()
+            if existing:
+                return Response(
+                    {
+                        "detail": "Active deletion request exists.",
+                        "code": "active_deletion_request_exists",
+                    },
+                    status=409,
+                )
+            dr = AccountDeletionRequest.objects.create(
+                subject_user=request.user,
+                requested_by=request.user,
+                reason=serializer.validated_data["reason"],
             )
-        dr = AccountDeletionRequest.objects.create(
-            subject_user=request.user,
-            requested_by=request.user,
-            reason=reason,
+        from apps.core.audit_service import create_audit_event
+        from apps.core.models import (
+            AuditEventCategory,
+            AuditEventResult,
+            AuditEventSeverity,
+            RetentionClass,
+        )
+        create_audit_event(
+            event_type="privacy.deletion.requested",
+            category=AuditEventCategory.PRIVACY,
+            severity=AuditEventSeverity.INFO,
+            result=AuditEventResult.SUCCESS,
+            actor_id=str(request.user.id),
+            actor_role=request.user.role,
+            target_type="AccountDeletionRequest",
+            target_id=str(dr.id),
+            summary="Patient submitted account deletion request.",
+            retention_class=RetentionClass.PRIVACY_DECISION,
         )
         return Response(AccountDeletionRequestSerializer(dr).data, status=201)
 

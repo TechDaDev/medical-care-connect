@@ -15,4 +15,9 @@ urlpatterns = [
     # Deletion
     path("deletion-requests/", views.deletion_list_create, name="deletion-list-create"),
     path("deletion-requests/<uuid:id>/", views.deletion_detail_cancel, name="deletion-detail-cancel"),
+    path(
+        "deletion-requests/<uuid:id>/cancel/",
+        views.deletion_detail_cancel,
+        name="deletion-cancel",
+    ),
 ]

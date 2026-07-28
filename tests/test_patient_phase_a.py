@@ -205,6 +205,7 @@ class PatientDashboardPhaseATests(TestCase):
                 "unread_messages",
                 "needs_patient_action",
                 "has_medical_record",
+                "medical_record_id",
             },
         )
         self.assertIsNotNone(
@@ -442,6 +443,7 @@ class PatientDashboardPhaseATests(TestCase):
         self.assertEqual(recent["unread_messages"], 1)
         self.assertTrue(recent["needs_patient_action"])
         self.assertTrue(recent["has_medical_record"])
+        self.assertIsNotNone(recent["medical_record_id"])
         self.assertNotIn("description", recent)
 
     def test_dashboard_query_count_is_bounded(self):

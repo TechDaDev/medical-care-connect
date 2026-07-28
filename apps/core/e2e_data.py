@@ -26,6 +26,7 @@ from apps.core.models import (
 )
 from apps.doctors.models import DoctorProfile, LicenseDocument
 from apps.messaging.models import ConsultationMessage, MessageType
+from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.notifications.models import Notification, NotificationType
 from apps.patients.models import PatientProfile
 from apps.privacy.models import AccountDeletionRequest
@@ -159,6 +160,16 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         title=f"{prefix} synthetic published review",
         body="Synthetic local acceptance review.",
         status=ReviewStatus.PUBLISHED,
+    )
+    MedicalRecordDraft.objects.create(
+        consultation=consultations[-1],
+        status=RecordStatus.FINALIZED,
+        chief_complaint=f"{prefix} synthetic patient-visible record",
+        history_of_present_illness="Synthetic local acceptance history.",
+        symptoms=["synthetic symptom"],
+        severity=2,
+        finalized_at=timezone.now(),
+        doctor_notes="Internal synthetic note; never patient-visible.",
     )
     AccountDeletionRequest.objects.create(
         subject_user=patient_user,

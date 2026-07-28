@@ -1,10 +1,27 @@
 from typing import TypedDict
 
-from django.db.models import Count, Exists, IntegerField, Max, OuterRef, Q, Subquery
+import uuid
+
+from django.db.models import (
+    Case,
+    CharField,
+    Count,
+    DateTimeField,
+    Exists,
+    IntegerField,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -12,14 +29,22 @@ from rest_framework.response import Response
 from apps.accounts.permissions import IsPatient
 from apps.ai_intake.models import IntakeSessionStatus
 from apps.consultations.models import Consultation, ConsultationStatus
-from apps.medical_records.models import MedicalRecordDraft
+from apps.medical_records.models import MedicalRecordDraft, RecordStatus
+from apps.medical_records.serializers import (
+    PatientMedicalRecordListSerializer,
+    PatientMedicalRecordSerializer,
+)
 from apps.messaging.models import ConsultationMessage
 from apps.notifications.models import Notification
 from apps.patients.models import PatientProfile
 from apps.patients.serializers import (
-    PatientProfileDetailSerializer,
-    PatientProfileSerializer,
+    PatientMessageThreadSerializer,
+    PatientMedicalRecordQuerySerializer,
+    PatientMessageThreadQuerySerializer,
+    PatientProfileCompositeSerializer,
+    PatientProfileUpdateSerializer,
 )
+from apps.patients.services.profile_completion import calculate_profile_completion
 
 ACTIVE_PATIENT_STATUSES = (
     ConsultationStatus.SUBMITTED,
@@ -87,6 +112,9 @@ ATTENTION_CONFIG: dict[str, AttentionConfig] = {
 
 
 def _dashboard_consultations(consultations, user):
+    medical_record = MedicalRecordDraft.objects.filter(
+        consultation_id=OuterRef("pk")
+    )
     unread_count = (
         ConsultationMessage.objects.filter(consultation_id=OuterRef("pk"))
         .exclude(sender=user)
@@ -103,38 +131,33 @@ def _dashboard_consultations(consultations, user):
         ),
         last_message_at=Max("messages__sent_at"),
         has_medical_record=Exists(
-            MedicalRecordDraft.objects.filter(consultation_id=OuterRef("pk"))
+            medical_record
         ),
+        medical_record_id=Subquery(medical_record.values("id")[:1]),
     )
 
 
-def _profile_completion(user, profile: PatientProfile) -> dict:
-    values = {
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "phone_number": user.phone_number,
-        "date_of_birth": profile.date_of_birth,
-        "gender": profile.gender,
-        "preferred_language": profile.preferred_language,
-        "address": profile.address,
-        "emergency_contact_name": profile.emergency_contact_name,
-        "emergency_contact_phone": profile.emergency_contact_phone,
-        "blood_type": None if profile.blood_type == "unknown" else profile.blood_type,
-    }
-    missing_fields = [field for field, value in values.items() if not value]
-    complete_count = len(values) - len(missing_fields)
-    return {
-        "completion_percent": round(complete_count / len(values) * 100),
-        "missing_fields": missing_fields,
-        "emergency_contact_complete": bool(
-            profile.emergency_contact_name and profile.emergency_contact_phone
-        ),
-        "basic_health_complete": bool(
-            profile.date_of_birth
-            and profile.gender
-            and profile.blood_type != "unknown"
-        ),
-    }
+class PatientPageNumberPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+def _as_uuid(value):
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _composite_profile(profile):
+    return PatientProfileCompositeSerializer(
+        profile,
+        context={
+            "completion": calculate_profile_completion(profile.user, profile),
+            "generated_at": timezone.now(),
+        },
+    ).data
 
 
 def _attention_item(
@@ -172,14 +195,158 @@ def my_patient_profile(request: Request) -> Response:
         )
 
     if request.method == "GET":
-        serializer = PatientProfileDetailSerializer(profile)
-        return Response(serializer.data)
+        return Response(_composite_profile(profile))
 
-    serializer = PatientProfileSerializer(profile, data=request.data, partial=True)
+    serializer = PatientProfileUpdateSerializer(
+        profile,
+        data=request.data,
+        partial=True,
+    )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    detail_serializer = PatientProfileDetailSerializer(profile)
-    return Response(detail_serializer.data)
+    return Response(_composite_profile(profile))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsPatient])
+def my_medical_records(request: Request) -> Response:
+    profile = request.user.patient_profile
+    query_serializer = PatientMedicalRecordQuerySerializer(
+        data=request.query_params
+    )
+    query_serializer.is_valid(raise_exception=True)
+    filters = query_serializer.validated_data
+    records = MedicalRecordDraft.objects.filter(
+        consultation__patient=profile
+    ).select_related(
+        "consultation__doctor__user",
+        "consultation__specialty",
+    )
+
+    if value := filters.get("status"):
+        records = records.filter(status=value)
+    if value := filters.get("doctor"):
+        records = records.filter(consultation__doctor_id=value)
+    if value := filters.get("specialty"):
+        records = records.filter(consultation__specialty_id=value)
+    if value := filters.get("created_after"):
+        records = records.filter(created_at__date__gte=value)
+    if value := filters.get("created_before"):
+        records = records.filter(created_at__date__lte=value)
+    if search := filters.get("search"):
+        search_filter = (
+            Q(consultation__doctor__user__first_name__icontains=search)
+            | Q(consultation__doctor__user__last_name__icontains=search)
+            | Q(consultation__specialty__name__icontains=search)
+        )
+        if identifier := _as_uuid(search):
+            search_filter |= Q(id=identifier) | Q(consultation_id=identifier)
+        records = records.filter(search_filter)
+
+    ordering = filters.get("ordering")
+    if ordering:
+        records = records.order_by(ordering)
+    else:
+        records = records.annotate(
+            finalized_first=Case(
+                When(status=RecordStatus.FINALIZED, then=Value(0)),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        ).order_by("finalized_first", "-updated_at")
+
+    paginator = PatientPageNumberPagination()
+    page = paginator.paginate_queryset(records, request)
+    data = PatientMedicalRecordListSerializer(page, many=True).data
+    return paginator.get_paginated_response(data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsPatient])
+def my_medical_record_detail(request: Request, id) -> Response:
+    record = get_object_or_404(
+        MedicalRecordDraft.objects.select_related(
+            "consultation__doctor__user",
+            "consultation__specialty",
+        ),
+        id=id,
+        consultation__patient=request.user.patient_profile,
+    )
+    return Response(PatientMedicalRecordSerializer(record).data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsPatient])
+def my_message_threads(request: Request) -> Response:
+    query_serializer = PatientMessageThreadQuerySerializer(
+        data=request.query_params
+    )
+    query_serializer.is_valid(raise_exception=True)
+    filters = query_serializer.validated_data
+    latest_messages = ConsultationMessage.objects.filter(
+        consultation_id=OuterRef("pk")
+    ).order_by("-sent_at", "-created_at")
+    unread = (
+        ConsultationMessage.objects.filter(consultation_id=OuterRef("pk"))
+        .exclude(sender=request.user)
+        .exclude(read_receipts__user=request.user)
+        .order_by()
+        .values("consultation_id")
+        .annotate(total=Count("id", distinct=True))
+        .values("total")
+    )
+    threads = Consultation.objects.filter(
+        patient=request.user.patient_profile
+    ).select_related(
+        "doctor__user",
+        "specialty",
+    ).annotate(
+        unread_count=Coalesce(
+            Subquery(unread, output_field=IntegerField()),
+            0,
+        ),
+        last_message_at=Subquery(
+            latest_messages.values("sent_at")[:1],
+            output_field=DateTimeField(),
+        ),
+        last_message_content=Subquery(
+            latest_messages.values("content")[:1],
+            output_field=CharField(),
+        ),
+        last_message_sender_role=Subquery(
+            latest_messages.values("sender__role")[:1],
+            output_field=CharField(),
+        ),
+    ).filter(last_message_at__isnull=False)
+
+    if filters.get("unread_only"):
+        threads = threads.filter(unread_count__gt=0)
+    if value := filters.get("consultation_status"):
+        threads = threads.filter(status=value)
+    if value := filters.get("doctor"):
+        threads = threads.filter(doctor_id=value)
+    if search := filters.get("search"):
+        search_filter = (
+            Q(doctor__user__first_name__icontains=search)
+            | Q(doctor__user__last_name__icontains=search)
+            | Q(specialty__name__icontains=search)
+        )
+        if identifier := _as_uuid(search):
+            search_filter |= Q(id=identifier)
+        threads = threads.filter(search_filter)
+
+    ordering = filters.get("ordering")
+    if ordering in {"last_message_at", "-last_message_at"}:
+        threads = threads.order_by(ordering)
+    elif ordering in {"unread_count", "-unread_count"}:
+        threads = threads.order_by(ordering, "-last_message_at")
+    else:
+        threads = threads.order_by("-unread_count", "-last_message_at")
+
+    paginator = PatientPageNumberPagination()
+    page = paginator.paginate_queryset(threads, request)
+    data = PatientMessageThreadSerializer(page, many=True).data
+    return paginator.get_paginated_response(data)
 
 
 @api_view(["GET"])
@@ -373,6 +540,7 @@ def my_patient_dashboard(request: Request) -> Response:
                 )
             ),
             "has_medical_record": consultation.has_medical_record,
+            "medical_record_id": consultation.medical_record_id,
         }
         for consultation in dashboard_consultations.select_related(
             "doctor__user",
@@ -381,6 +549,7 @@ def my_patient_dashboard(request: Request) -> Response:
         ).order_by("-created_at")[:5]
     ]
 
+    completion = calculate_profile_completion(request.user, profile)
     return Response({
         "consultations": consultation_counts,
         "attention": {
@@ -395,7 +564,14 @@ def my_patient_dashboard(request: Request) -> Response:
             "unread_total": notifications.filter(is_read=False).count(),
             "recent": recent_notifications,
         },
-        "profile": _profile_completion(request.user, profile),
+        "profile": {
+            "completion_percent": completion["percent"],
+            "missing_fields": completion["missing_fields"],
+            "emergency_contact_complete": (
+                completion["emergency_contact_complete"]
+            ),
+            "basic_health_complete": completion["basic_health_complete"],
+        },
         "recent_consultations": recent_consultations,
         "generated_at": timezone.now(),
     })

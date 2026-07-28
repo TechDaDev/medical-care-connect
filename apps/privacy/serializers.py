@@ -27,6 +27,20 @@ class DataExportCreateSerializer(serializers.Serializer):
     pass  # No input fields — server sets subject_user
 
 
+class DeletionRequestCreateSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        min_length=10,
+        max_length=1000,
+        trim_whitespace=True,
+    )
+    confirmation = serializers.BooleanField(required=True)
+
+    def validate_confirmation(self, value):
+        if value is not True:
+            raise serializers.ValidationError("Explicit confirmation is required.")
+        return value
+
+
 class AccountDeletionRequestSerializer(serializers.ModelSerializer):
     """Safe metadata for deletion requests."""
 

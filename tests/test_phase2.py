@@ -245,9 +245,9 @@ class PatientProfileAPITests(TestCase):
         response = self.client.get(url, **{"HTTP_AUTHORIZATION": f"Bearer {self.token}"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["email"], "patient@example.com")
-        self.assertEqual(data["gender"], "female")
-        self.assertEqual(data["full_name"], "Test Patient")
+        self.assertEqual(data["account"]["email"], "patient@example.com")
+        self.assertEqual(data["profile"]["gender"], "female")
+        self.assertEqual(data["account"]["full_name"], "Test Patient")
 
     def test_update_profile(self) -> None:
         url = reverse("patients:my-profile")

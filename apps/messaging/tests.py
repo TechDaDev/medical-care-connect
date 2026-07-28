@@ -188,9 +188,9 @@ class Phase5MessagingTests(APITestCase):
         # List notifications
         resp = self.client.get("/api/notifications/")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp.data), 1)
-        self.assertEqual(resp.data[0]["title"], "Test Notification")
-        self.assertFalse(resp.data[0]["is_read"])
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(resp.data["results"][0]["title"], "Test Notification")
+        self.assertFalse(resp.data["results"][0]["is_read"])
 
         # Mark read
         resp = self.client.post("/api/notifications/read/")
