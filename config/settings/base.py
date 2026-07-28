@@ -85,6 +85,7 @@ CORS_EXPOSE_HEADERS = [
 ]
 
 ROOT_URLCONF = "config.urls"
+CSRF_FAILURE_VIEW = "apps.core.exceptions.csrf_failure_view"
 
 TEMPLATES = [
     {

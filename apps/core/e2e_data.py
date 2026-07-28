@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from io import BytesIO
 
 from django.conf import settings
+from django.contrib.sessions.models import Session
 from django.core.management.base import CommandError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts.models import User, UserRole
+from apps.ai_intake.models import (
+    AIIntakeMessage,
+    AIIntakeSession,
+    EmergencyLevel,
+    IntakeSessionStatus,
+)
 from apps.attachments.choices import AttachmentStatus, ScanStatus
 from apps.attachments.models import ConsultationAttachment
 from apps.attachments.services.factory import clear_backend_cache, get_storage_backend
@@ -25,12 +32,22 @@ from apps.core.models import (
     AuditEventSeverity,
 )
 from apps.doctors.models import DoctorProfile, LicenseDocument
-from apps.messaging.models import ConsultationMessage, MessageType
+from apps.messaging.models import ConsultationMessage, MessageReadReceipt, MessageType
 from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.notifications.models import Notification, NotificationType
 from apps.patients.models import PatientProfile
-from apps.privacy.models import AccountDeletionRequest
-from apps.reviews.models import ConsultationReview, ReviewStatus
+from apps.privacy.models import (
+    AccountDeletionRequest,
+    DataExportRequest,
+    DeletionStatus,
+    ExportStatus,
+)
+from apps.reviews.models import (
+    ConsultationReview,
+    DoctorReviewResponse,
+    ReviewReport,
+    ReviewStatus,
+)
 from apps.specialties.models import Specialty
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
@@ -89,11 +106,33 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         description=f"{prefix} fixture",
         display_order=9000,
     )
+    Specialty.objects.create(
+        name=f"Synthetic Inactive Medicine {run_id}",
+        name_en=f"Synthetic Inactive Medicine {run_id}",
+        name_ar=f"طب اصطناعي غير نشط {run_id}",
+        name_ckb=f"پزیشکی دەستکردی ناچالاک {run_id}",
+        slug=f"{prefix}-inactive",
+        description=f"{prefix} inactive fixture",
+        is_active=False,
+        display_order=9001,
+    )
     admin = _user(run_id, "admin", UserRole.ADMINISTRATOR, password)
     _user(run_id, "secondary-admin", UserRole.ADMINISTRATOR, password)
     _user(run_id, "coordinator", UserRole.COORDINATOR, password)
     patient_user = _user(run_id, "patient", UserRole.PATIENT, password)
     patient = PatientProfile.objects.create(user=patient_user, preferred_language="en")
+    complete_patient_user = _user(
+        run_id, "patient-complete", UserRole.PATIENT, password
+    )
+    PatientProfile.objects.create(
+        user=complete_patient_user,
+        date_of_birth=date(1990, 1, 1),
+        preferred_language="en",
+        address=f"{prefix} synthetic address",
+        emergency_contact_name=f"{prefix} synthetic contact",
+        emergency_contact_phone="+9640000000000",
+        notes=f"{prefix} non-clinical fixture",
+    )
 
     doctors: dict[str, DoctorProfile] = {}
     for state in ("pending", "approved", "suspended", "unavailable"):
@@ -121,14 +160,17 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         )
 
     consultations = []
-    for index, (status, priority) in enumerate(
-        (
-            (ConsultationStatus.SUBMITTED, Priority.URGENT),
-            (ConsultationStatus.ACCEPTED, Priority.MEDIUM),
-            (ConsultationStatus.DOCTOR_REVIEW, Priority.HIGH),
-            (ConsultationStatus.COMPLETED, Priority.LOW),
+    lifecycle_states = tuple(ConsultationStatus.values)
+    for index, status in enumerate(lifecycle_states):
+        priority = (
+            Priority.URGENT
+            if status == ConsultationStatus.SUBMITTED
+            else Priority.HIGH
+            if status == ConsultationStatus.EMERGENCY_ESCALATED
+            else Priority.LOW
+            if status in {ConsultationStatus.COMPLETED, ConsultationStatus.CANCELLED}
+            else Priority.MEDIUM
         )
-    ):
         consultations.append(
             Consultation.objects.create(
                 patient=patient,
@@ -141,20 +183,75 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             )
         )
 
+    submitted_consultation = consultations[
+        lifecycle_states.index(ConsultationStatus.SUBMITTED)
+    ]
+    completed_consultation = consultations[
+        lifecycle_states.index(ConsultationStatus.COMPLETED)
+    ]
     ConsultationMessage.objects.create(
-        consultation=consultations[0],
+        consultation=submitted_consultation,
         sender=patient_user,
         message_type=MessageType.TEXT,
         content=f"{prefix} synthetic message",
     )
     incoming_message = ConsultationMessage.objects.create(
-        consultation=consultations[0],
+        consultation=submitted_consultation,
+        sender=doctors["approved"].user,
+        message_type=MessageType.TEXT,
+        content=f"{prefix} read synthetic doctor message",
+    )
+    MessageReadReceipt.objects.create(message=incoming_message, user=patient_user)
+    unread_message = ConsultationMessage.objects.create(
+        consultation=submitted_consultation,
         sender=doctors["approved"].user,
         message_type=MessageType.TEXT,
         content=f"{prefix} synthetic incoming message",
     )
+    incomplete_intake = AIIntakeSession.objects.create(
+        consultation=consultations[
+            lifecycle_states.index(ConsultationStatus.INTAKE_IN_PROGRESS)
+        ],
+        status=IntakeSessionStatus.IN_PROGRESS,
+        current_question=f"{prefix} synthetic question",
+        question_count=1,
+        started_at=timezone.now(),
+    )
+    AIIntakeMessage.objects.create(
+        session=incomplete_intake,
+        role="assistant",
+        content=f"{prefix} synthetic intake question",
+        sequence_number=1,
+    )
+    completed_intake = AIIntakeSession.objects.create(
+        consultation=consultations[
+            lifecycle_states.index(ConsultationStatus.INTAKE_COMPLETED)
+        ],
+        status=IntakeSessionStatus.CONFIRMED,
+        question_count=2,
+        started_at=timezone.now() - timedelta(minutes=5),
+        completed_at=timezone.now(),
+        confirmed_at=timezone.now(),
+    )
+    AIIntakeMessage.objects.create(
+        session=completed_intake,
+        role="patient",
+        content=f"{prefix} synthetic completed intake response",
+        sequence_number=1,
+    )
+    AIIntakeSession.objects.create(
+        consultation=consultations[
+            lifecycle_states.index(ConsultationStatus.EMERGENCY_ESCALATED)
+        ],
+        status=IntakeSessionStatus.EMERGENCY_STOPPED,
+        emergency_detected=True,
+        emergency_level=EmergencyLevel.EMERGENCY,
+        emergency_reasons=[f"{prefix} synthetic emergency rule"],
+        started_at=timezone.now(),
+        completed_at=timezone.now(),
+    )
     ConsultationReview.objects.create(
-        consultation=consultations[-1],
+        consultation=completed_consultation,
         reviewer=patient,
         rating=5,
         title=f"{prefix} synthetic published review",
@@ -162,7 +259,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         status=ReviewStatus.PUBLISHED,
     )
     MedicalRecordDraft.objects.create(
-        consultation=consultations[-1],
+        consultation=completed_consultation,
         status=RecordStatus.FINALIZED,
         chief_complaint=f"{prefix} synthetic patient-visible record",
         history_of_present_illness="Synthetic local acceptance history.",
@@ -183,6 +280,19 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         requested_by=second_patient_user,
         reason=f"{prefix} reject synthetic privacy request",
     )
+    deletion_history_user = _user(
+        run_id, "patient-deletion-history", UserRole.PATIENT, password
+    )
+    PatientProfile.objects.create(user=deletion_history_user, preferred_language="en")
+    AccountDeletionRequest.objects.create(
+        subject_user=deletion_history_user,
+        requested_by=deletion_history_user,
+        status=DeletionStatus.REJECTED,
+        reason=f"{prefix} rejected synthetic privacy history",
+        reviewed_at=timezone.now(),
+        reviewed_by=admin,
+        rejection_reason=f"{prefix} synthetic rejection",
+    )
     Notification.objects.create(
         recipient=admin,
         notification_type=NotificationType.STATUS_CHANGE,
@@ -194,8 +304,16 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         notification_type=NotificationType.NEW_MESSAGE,
         title=f"{prefix} patient dashboard notification",
         body="Synthetic local patient notification.",
-        consultation=consultations[0],
+        consultation=submitted_consultation,
         related_message=incoming_message,
+    )
+    Notification.objects.create(
+        recipient=patient_user,
+        notification_type=NotificationType.NEW_MESSAGE,
+        title=f"{prefix} unread patient notification",
+        body="Synthetic unread local patient notification.",
+        consultation=submitted_consultation,
+        related_message=unread_message,
     )
     AuditEvent.objects.create(
         event_type="e2e_fixture_seeded",
@@ -215,6 +333,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
     clear_backend_cache()
     storage = get_storage_backend()
     attachment_specs = (
+        ("pending", AttachmentStatus.PENDING, ScanStatus.PENDING),
         ("clean", AttachmentStatus.AVAILABLE, ScanStatus.CLEAN),
         ("quarantined", AttachmentStatus.QUARANTINED, ScanStatus.FAILED),
         ("rejected", AttachmentStatus.REJECTED, ScanStatus.INFECTED),
@@ -226,7 +345,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         storage.save(BytesIO(content), storage_key)
         is_retention = name == "retention"
         ConsultationAttachment.objects.create(
-            consultation=consultations[-1],
+            consultation=completed_consultation,
             uploaded_by=patient_user,
             storage_provider="local",
             storage_key=storage_key,
@@ -240,7 +359,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             status=status,
             scan_status=scan_status,
             scan_provider="synthetic",
-            scan_completed_at=timezone.now(),
+            scan_completed_at=None if name == "pending" else timezone.now(),
             quarantine_reason="Synthetic quarantine fixture" if name == "quarantined" else "",
             rejection_reason="Synthetic unsafe fixture" if name == "rejected" else "",
             is_deleted=is_retention,
@@ -248,11 +367,42 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             deletion_reason="Synthetic retention fixture" if is_retention else "",
         )
 
+    export_specs = (
+        ("pending", ExportStatus.PENDING, False),
+        ("completed", ExportStatus.COMPLETED, True),
+        ("expired", ExportStatus.EXPIRED, True),
+    )
+    for name, export_status, has_archive in export_specs:
+        storage_key = f"{prefix}/exports/{name}.zip" if has_archive else ""
+        archive = f"{prefix} synthetic export archive {name}\n".encode()
+        if storage_key:
+            storage.save(BytesIO(archive), storage_key)
+        DataExportRequest.objects.create(
+            requested_by=patient_user,
+            subject_user=patient_user,
+            status=export_status,
+            started_at=timezone.now() if has_archive else None,
+            completed_at=timezone.now() if has_archive else None,
+            expires_at=(
+                timezone.now() - timedelta(days=1)
+                if export_status == ExportStatus.EXPIRED
+                else timezone.now() + timedelta(days=7)
+                if has_archive
+                else None
+            ),
+            storage_provider="local" if has_archive else "",
+            storage_key=storage_key,
+            checksum=hashlib.sha256(archive).hexdigest() if has_archive else "",
+            size_bytes=len(archive) if has_archive else None,
+        )
+
     return {
         "users": User.objects.filter(email__startswith=f"e2e+{run_id}+").count(),
         "consultations": len(consultations),
         "attachments": len(attachment_specs),
-        "privacy_requests": 2,
+        "privacy_requests": 3,
+        "privacy_exports": len(export_specs),
+        "intake_sessions": 3,
     }
 
 
@@ -260,7 +410,10 @@ def seed(run_id: str, password: str) -> dict[str, int]:
 def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     run_id = validate_local_e2e(run_id)
     prefix = marker(run_id)
-    users = User.objects.filter(email__startswith=f"e2e+{run_id}+")
+    users = User.objects.filter(
+        Q(email__startswith=f"e2e+{run_id}+")
+        | Q(first_name="Synthetic", last_name__endswith=f" {run_id}")
+    )
     user_ids = list(users.values_list("id", flat=True))
     consultations = Consultation.objects.filter(
         Q(description__startswith=prefix)
@@ -276,7 +429,13 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     keys.update(license_documents.values_list("storage_key", flat=True))
     keys.update(
         f"{prefix}/{name}.txt"
-        for name in ("clean", "quarantined", "rejected", "retention")
+        for name in ("pending", "clean", "quarantined", "rejected", "retention")
+    )
+    keys.update(
+        DataExportRequest.objects.filter(
+            subject_user_id__in=user_ids,
+            storage_key__startswith=f"{prefix}/",
+        ).values_list("storage_key", flat=True)
     )
 
     clear_backend_cache()
@@ -287,7 +446,9 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     attachments.delete()
     license_documents.delete()
     OutstandingToken.objects.filter(user_id__in=user_ids).delete()
+    Session.objects.filter(session_key__startswith=prefix).delete()
     AccountDeletionRequest.objects.filter(reason__startswith=prefix).delete()
+    DataExportRequest.objects.filter(subject_user_id__in=user_ids).delete()
     AuditEvent.objects.filter(
         target_type="consultation",
         target_id__in=consultation_ids,
@@ -295,12 +456,23 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     consultations.delete()
     Notification.objects.filter(title__startswith=prefix).delete()
     users.delete()
-    Specialty.objects.filter(slug=prefix).delete()
+    Specialty.objects.filter(slug__startswith=prefix).delete()
     AuditEvent.objects.filter(request_id=prefix, source="seed_e2e_data").delete()
 
     remaining = {
-        "users": User.objects.filter(email__startswith=f"e2e+{run_id}+").count(),
+        "users": User.objects.filter(
+            Q(email__startswith=f"e2e+{run_id}+")
+            | Q(first_name="Synthetic", last_name__endswith=f" {run_id}")
+        ).count(),
+        "patient_profiles": PatientProfile.objects.filter(user_id__in=user_ids).count(),
+        "doctor_profiles": DoctorProfile.objects.filter(user_id__in=user_ids).count(),
         "consultations": Consultation.objects.filter(description__startswith=prefix).count(),
+        "intake_sessions": AIIntakeSession.objects.filter(
+            consultation_id__in=consultation_ids
+        ).count(),
+        "intake_messages": AIIntakeMessage.objects.filter(
+            content__startswith=prefix
+        ).count(),
         "attachments": ConsultationAttachment.objects.filter(
             storage_key__startswith=f"{prefix}/"
         ).count(),
@@ -309,15 +481,38 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
         ).count(),
         "notifications": Notification.objects.filter(title__startswith=prefix).count(),
         "messages": ConsultationMessage.objects.filter(content__startswith=prefix).count(),
+        "read_receipts": MessageReadReceipt.objects.filter(
+            user_id__in=user_ids
+        ).count(),
+        "medical_records": MedicalRecordDraft.objects.filter(
+            chief_complaint__startswith=prefix
+        ).count(),
+        "reviews": ConsultationReview.objects.filter(
+            title__startswith=prefix
+        ).count(),
+        "review_responses": DoctorReviewResponse.objects.filter(
+            review__title__startswith=prefix
+        ).count(),
+        "review_reports": ReviewReport.objects.filter(
+            review__title__startswith=prefix
+        ).count(),
+        "privacy_exports": DataExportRequest.objects.filter(
+            subject_user_id__in=user_ids
+        ).count(),
         "tokens": OutstandingToken.objects.filter(user_id__in=user_ids).count(),
+        "sessions": Session.objects.filter(session_key__startswith=prefix).count(),
         "license_documents": LicenseDocument.objects.filter(
             doctor_profile__user_id__in=user_ids
         ).count(),
-        "specialties": Specialty.objects.filter(slug=prefix).count(),
+        "specialties": Specialty.objects.filter(slug__startswith=prefix).count(),
         "audit_events": AuditEvent.objects.filter(
             request_id=prefix, source="seed_e2e_data"
         ).count(),
         "storage_objects": sum(1 for key in keys if storage.exists(key)),
+        "idempotency_markers": Consultation.objects.filter(
+            description__startswith=prefix,
+            client_request_id__isnull=False,
+        ).count(),
     }
     if verify and any(remaining.values()):
         raise CommandError(f"Synthetic cleanup incomplete: {remaining}")

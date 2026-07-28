@@ -6,7 +6,7 @@ from apps.core.e2e_data import seed
 
 
 class Command(BaseCommand):
-    help = "Create deterministic local-only Phase F synthetic fixtures."
+    help = "Create deterministic local-only patient acceptance fixtures."
 
     def add_arguments(self, parser):
         parser.add_argument("--run-id", required=True)

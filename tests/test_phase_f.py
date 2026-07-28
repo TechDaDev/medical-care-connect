@@ -8,10 +8,11 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
 from apps.accounts.models import User
+from apps.ai_intake.models import AIIntakeSession
 from apps.attachments.models import ConsultationAttachment
 from apps.consultations.models import Consultation
 from apps.core.models import AuditEvent
-from apps.privacy.models import AccountDeletionRequest
+from apps.privacy.models import AccountDeletionRequest, DataExportRequest
 
 
 @override_settings(
@@ -32,26 +33,28 @@ class SyntheticFixtureTests(TestCase):
     def test_seed_and_cleanup_are_run_scoped(self):
         call_command("seed_e2e_data", run_id="phase-f-test")
         self.assertEqual(
-            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 9
+            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 11
         )
         self.assertEqual(
             Consultation.objects.filter(
                 description__startswith="e2e-phase-f-test"
             ).count(),
-            4,
+            15,
         )
         self.assertEqual(
             ConsultationAttachment.objects.filter(
                 storage_key__startswith="e2e-phase-f-test/"
             ).count(),
-            4,
+            5,
         )
         self.assertEqual(
             AccountDeletionRequest.objects.filter(
                 reason__startswith="e2e-phase-f-test"
             ).count(),
-            2,
+            3,
         )
+        self.assertEqual(AIIntakeSession.objects.count(), 3)
+        self.assertEqual(DataExportRequest.objects.count(), 3)
         self.assertTrue(
             AuditEvent.objects.filter(request_id="e2e-phase-f-test").exists()
         )

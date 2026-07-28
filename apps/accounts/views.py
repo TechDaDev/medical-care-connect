@@ -3,7 +3,7 @@ from django.db import connections
 from django.db.utils import OperationalError
 from django.middleware.csrf import get_token as get_csrf_token
 from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_protect
 from rest_framework import exceptions, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -92,7 +92,7 @@ def current_user(request: Request) -> Response:
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RegisterRateThrottle])
-@csrf_exempt
+@csrf_protect
 def register_patient(request: Request) -> Response:
     """Register a new patient account.
 
@@ -113,7 +113,7 @@ def register_patient(request: Request) -> Response:
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RegisterRateThrottle])
-@csrf_exempt
+@csrf_protect
 def register_doctor(request: Request) -> Response:
     """Create pending doctor application and authenticate account via cookies."""
     serializer = RegisterDoctorSerializer(data=request.data)
@@ -141,12 +141,12 @@ def register_doctor(request: Request) -> Response:
 
 # ── Login ───────────────────────────────────────────────────────────────────
 
-@method_decorator(csrf_exempt, name="dispatch")
+@method_decorator(csrf_protect, name="dispatch")
 class LoginView(TokenObtainPairView):
     """Log in with email and password.
 
-    CSRF-exempt because login establishes authentication (no existing cookie
-    to forge). CSRF cookie is set in the response for subsequent requests.
+    Requires the centralized CSRF bootstrap used by all browser mutations.
+    CSRF cookie is refreshed in the response for subsequent requests.
     Sets JWT HTTP-only cookies on success.
     Returns serialized user data (no raw tokens in JSON body).
     Rejects inactive accounts.
@@ -184,13 +184,24 @@ class LoginView(TokenObtainPairView):
 
 # ── Token Refresh (cookie-aware) ───────────────────────────────────────────
 
-@method_decorator(csrf_exempt, name="dispatch")
+@method_decorator(csrf_protect, name="dispatch")
 class CookieTokenRefreshView(TokenRefreshView):
     """Refresh access token using refresh token from HTTP-only cookie.
 
     Also accepts ``refresh`` in JSON body for backward compatibility.
     """
     throttle_classes = [RefreshRateThrottle]
+
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.data.get("refresh") or request.COOKIES.get(
+            settings.SIMPLE_JWT.get("AUTH_COOKIE_REFRESH", "mcc_refresh")
+        )
+        serializer = self.get_serializer(data={"refresh": refresh_token})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError as exc:
+            raise InvalidToken(exc.args[0]) from exc
+        return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
     def finalize_response(self, request, response, *args, **kwargs):
         if response.status_code == status.HTTP_200_OK:

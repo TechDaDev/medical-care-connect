@@ -1,7 +1,7 @@
 """Custom DRF exception handler for consistent API error responses."""
 
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from rest_framework import exceptions, status
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
@@ -12,6 +12,15 @@ from apps.core.security_events import (
     permission_denied,
     throttle_exceeded,
 )
+
+
+def csrf_failure_view(request, reason=""):
+    """Return API-shaped JSON for Django middleware CSRF rejections."""
+    csrf_failed(path=request.path)
+    return JsonResponse(
+        {"detail": "CSRF verification failed.", "code": "csrf_failed"},
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 def custom_exception_handler(exc, context):

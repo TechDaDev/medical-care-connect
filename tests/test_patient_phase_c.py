@@ -1,9 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import uuid4
 
-from django.db import connection
+from django.db import close_old_connections, connection
+from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from apps.accounts.models import User, UserRole
 from apps.ai_intake.models import AIIntakeMessage, AIIntakeSession
@@ -251,6 +254,95 @@ class PatientPhaseCTests(APITestCase):
             AuditEvent.objects.filter(
                 event_type="patient_intake_emergency_escalated",
                 target_id=str(self.consultation.id),
+            ).count(),
+            1,
+        )
+
+
+class PatientCancellationConcurrencyTests(TransactionTestCase):
+    """Exercise row locking with independent PostgreSQL connections."""
+
+    reset_sequences = True
+
+    def setUp(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("PostgreSQL required for row-lock concurrency acceptance")
+        specialty = Specialty.objects.create(
+            name="Phase E Concurrency",
+            name_en="Phase E Concurrency",
+            name_ar="تزامن المرحلة هـ",
+            name_ckb="هاوکاتی قۆناغی E",
+            slug="phase-e-concurrency",
+        )
+        self.patient_user = User.objects.create_user(
+            email="phase-e-concurrency-patient@example.test",
+            role=UserRole.PATIENT,
+        )
+        patient = PatientProfile.objects.create(user=self.patient_user)
+        self.doctor_user = User.objects.create_user(
+            email="phase-e-concurrency-doctor@example.test",
+            role=UserRole.DOCTOR,
+        )
+        doctor = DoctorProfile.objects.create(
+            user=self.doctor_user,
+            specialty=specialty,
+            professional_title="Concurrency Consultant",
+            license_number="PHASE-E-CONCURRENCY",
+            is_approved=True,
+            is_accepting_consultations=True,
+        )
+        self.consultation = Consultation.objects.create(
+            patient=patient,
+            doctor=doctor,
+            specialty=specialty,
+            status=ConsultationStatus.SUBMITTED,
+            description="Synthetic concurrent cancellation.",
+        )
+
+    def _cancel(self, barrier, reason):
+        close_old_connections()
+        client = APIClient()
+        client.force_authenticate(self.patient_user)
+        barrier.wait(timeout=5)
+        response = client.post(
+            reverse("consultations:cancel", args=[self.consultation.id]),
+            {"reason": reason, "expected_status": ConsultationStatus.SUBMITTED},
+            format="json",
+        )
+        result = (response.status_code, response.data.get("code"))
+        close_old_connections()
+        return result
+
+    def test_concurrent_cancellation_has_one_side_effect_set(self):
+        barrier = Barrier(2)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(
+                lambda reason: self._cancel(barrier, reason),
+                (
+                    "First concurrent patient cancellation reason.",
+                    "Second concurrent patient cancellation reason.",
+                ),
+            ))
+
+        self.consultation.refresh_from_db()
+        self.assertEqual(self.consultation.status, ConsultationStatus.CANCELLED)
+        self.assertCountEqual(
+            (code for _, code in results),
+            (None, "already_cancelled"),
+        )
+        self.assertTrue(all(status_code == 200 for status_code, _ in results))
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                event_type="patient_consultation_cancelled",
+                target_id=str(self.consultation.id),
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            Notification.objects.filter(
+                consultation=self.consultation,
+                notification_type=NotificationType.CONSULTATION_CANCELLED,
+                recipient=self.doctor_user,
             ).count(),
             1,
         )

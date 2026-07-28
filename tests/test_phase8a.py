@@ -142,12 +142,14 @@ class CookieAuthTests(TestCase):
     def test_csrf_rejects_unsafe_without_token(self):
         """PATCH without X-CSRFToken returns 403 when CSRF enforced."""
         csrf_client = Client(enforce_csrf_checks=True)
-        # Log in — cookies stored in client's jar
-        _jpost(csrf_client, reverse("accounts:login"), {
-            "email": "cookie@example.com", "password": self.password,
-        })
-        # Get CSRF cookie (stored in jar)
-        csrf_client.get(reverse("accounts:csrf"))
+        csrf_resp = csrf_client.get(reverse("accounts:csrf"))
+        csrf_cookie = csrf_resp.cookies["mcc_csrftoken"].value
+        _jpost(
+            csrf_client,
+            reverse("accounts:login"),
+            {"email": "cookie@example.com", "password": self.password},
+            HTTP_X_CSRFTOKEN=csrf_cookie,
+        )
         # PATCH without X-CSRFToken → CSRFFailure → 403
         resp = csrf_client.patch(
             reverse("accounts:current-user"),
@@ -167,14 +169,15 @@ class CookieAuthTests(TestCase):
     def test_csrf_allows_unsafe_with_token(self):
         """PATCH with X-CSRFToken succeeds when CSRF enforced."""
         csrf_client = Client(enforce_csrf_checks=True)
-        # Log in and get CSRF in separate steps (cookies in jar)
-        _jpost(csrf_client, reverse("accounts:login"), {
-            "email": "cookie@example.com", "password": self.password,
-        })
         csrf_resp = csrf_client.get(reverse("accounts:csrf"))
-        # Extract CSRF value from the response cookie for the header
         csrf_cookie = csrf_resp.cookies.get("mcc_csrftoken")
         self.assertIsNotNone(csrf_cookie)
+        _jpost(
+            csrf_client,
+            reverse("accounts:login"),
+            {"email": "cookie@example.com", "password": self.password},
+            HTTP_X_CSRFTOKEN=csrf_cookie.value,
+        )
         # PATCH with X-CSRFToken header → should pass CSRF
         resp = csrf_client.patch(
             reverse("accounts:current-user"),
@@ -185,6 +188,53 @@ class CookieAuthTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.user.refresh_from_db()
         self.assertEqual(self.user.first_name, "Updated")
+
+    @override_settings(
+        CSRF_COOKIE_NAME="mcc_csrftoken",
+        CSRF_COOKIE_HTTPONLY=False,
+        CSRF_USE_SESSIONS=False,
+    )
+    def test_authentication_bootstrap_mutations_require_csrf(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        cases = (
+            (
+                reverse("accounts:login"),
+                {"email": "cookie@example.com", "password": self.password},
+            ),
+            (
+                reverse("accounts:register-patient"),
+                {
+                    "email": "csrf-register@example.test",
+                    "password": self.password,
+                    "password_confirm": self.password,
+                    "first_name": "Synthetic",
+                    "last_name": "Patient",
+                },
+            ),
+            (reverse("accounts:token-refresh"), {}),
+        )
+        for url, payload in cases:
+            with self.subTest(url=url):
+                response = _jpost(csrf_client, url, payload)
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(response.json()["code"], "csrf_failed")
+
+        csrf_response = csrf_client.get(reverse("accounts:csrf"))
+        csrf_cookie = csrf_response.cookies["mcc_csrftoken"].value
+        login = _jpost(
+            csrf_client,
+            reverse("accounts:login"),
+            {"email": "cookie@example.com", "password": self.password},
+            HTTP_X_CSRFTOKEN=csrf_cookie,
+        )
+        self.assertEqual(login.status_code, 200)
+        refresh = _jpost(
+            csrf_client,
+            reverse("accounts:token-refresh"),
+            {},
+            HTTP_X_CSRFTOKEN=csrf_cookie,
+        )
+        self.assertEqual(refresh.status_code, 200)
 
     # ── CSRF endpoint ──────────────────────────────────────────────────
 
