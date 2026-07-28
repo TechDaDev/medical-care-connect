@@ -2,6 +2,7 @@
 
 import json
 from datetime import time
+from uuid import uuid4
 
 from django.test import TestCase
 from django.urls import reverse
@@ -49,6 +50,7 @@ class PublicDoctorDirectoryTests(TestCase):
             user=self.doc_user, specialty=self.spec,
             professional_title="Cardiologist", years_of_experience=10,
             consultation_fee=100, is_approved=True,
+            approval_status=DoctorProfile.ApprovalStatus.APPROVED,
             is_accepting_consultations=True, languages=["English"],
             license_number="LIC-CARDIO",
         )
@@ -67,26 +69,26 @@ class PublicDoctorDirectoryTests(TestCase):
         url = reverse("doctors:doctor-list")
         resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
-        data = resp.json()
+        data = resp.json()["results"]
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["full_name"], "Jane Doctor")
 
     def test_public_list_filter_accepting(self):
         url = reverse("doctors:doctor-list")
         resp = self.client.get(url, {"accepting": "true"})
-        self.assertEqual(len(resp.json()), 1)
+        self.assertEqual(len(resp.json()["results"]), 1)
 
         self.doc.is_accepting_consultations = False
         self.doc.save()
         resp = self.client.get(url, {"accepting": "true"})
-        self.assertEqual(len(resp.json()), 0)
+        self.assertEqual(len(resp.json()["results"]), 0)
 
     def test_public_list_search(self):
         url = reverse("doctors:doctor-list")
         resp = self.client.get(url, {"search": "Jane"})
-        self.assertEqual(len(resp.json()), 1)
+        self.assertEqual(len(resp.json()["results"]), 1)
         resp = self.client.get(url, {"search": "NotFound"})
-        self.assertEqual(len(resp.json()), 0)
+        self.assertEqual(len(resp.json()["results"]), 0)
 
     def test_public_detail_excludes_sensitive_fields(self):
         url = reverse("doctors:doctor-detail", args=[self.doc.id])
@@ -140,13 +142,23 @@ class ConsultationTests(TestCase):
     """Tests for consultation CRUD and actions."""
 
     def setUp(self) -> None:
+        self.spec = Specialty.objects.create(
+            name="General Medicine",
+            name_en="General Medicine",
+            name_ar="الطب العام",
+            name_ckb="پزیشکی گشتی",
+            slug="general-medicine",
+        )
         # Doctor
         self.doc_user = User.objects.create_user(
             email="doctor@example.com", password="pass123",
             first_name="Doc", role=UserRole.DOCTOR,
         )
         self.doc = DoctorProfile.objects.create(
-            user=self.doc_user, is_approved=True, is_accepting_consultations=True,
+            user=self.doc_user, specialty=self.spec,
+            is_approved=True,
+            approval_status=DoctorProfile.ApprovalStatus.APPROVED,
+            is_accepting_consultations=True,
             license_number="LIC-CONSULT",
         )
         self.doc_token = _login(self.client, "doctor@example.com", "pass123")
@@ -170,7 +182,11 @@ class ConsultationTests(TestCase):
 
     def test_create_consultation_patient_only(self):
         url = reverse("consultations:list")
-        resp = _jpost(self.client, url, {"doctor": str(self.doc.id)}, **self._pat_auth)
+        resp = _jpost(self.client, url, {
+            "doctor": str(self.doc.id),
+            "description": "Persistent headache lasting several days.",
+            "client_request_id": str(uuid4()),
+        }, **self._pat_auth)
         self.assertEqual(resp.status_code, 201)
         data = resp.json()
         self.assertEqual(data["status"], "submitted")
@@ -180,8 +196,12 @@ class ConsultationTests(TestCase):
         self.doc.is_accepting_consultations = False
         self.doc.save()
         url = reverse("consultations:list")
-        resp = _jpost(self.client, url, {"doctor": str(self.doc.id)}, **self._pat_auth)
-        self.assertEqual(resp.status_code, 400)
+        resp = _jpost(self.client, url, {
+            "doctor": str(self.doc.id),
+            "description": "Persistent headache lasting several days.",
+            "client_request_id": str(uuid4()),
+        }, **self._pat_auth)
+        self.assertEqual(resp.status_code, 409)
 
     def test_list_consultations_role_scoped(self):
         c = Consultation.objects.create(

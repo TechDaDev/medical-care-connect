@@ -15,8 +15,13 @@ from apps.consultations.models import Consultation, ConsultationStatus
 from apps.consultations.serializers import (
     ConsultationCancelSerializer,
     ConsultationCreateSerializer,
+    ConsultationCreateResponseSerializer,
     ConsultationDetailSerializer,
     ConsultationSerializer,
+)
+from apps.consultations.services import (
+    ConsultationCreationError,
+    create_patient_consultation,
 )
 
 
@@ -60,31 +65,74 @@ def _list_consultations(request: Request) -> Response:
 
 def _create_consultation(request: Request) -> Response:
     """Create a new consultation. Patient-only."""
-    # Enforce patient role
     if request.user.role != UserRole.PATIENT:
         return Response(
-            {"detail": "Only patients can create consultations."},
+            {
+                "detail": "patient_role_required",
+                "code": "patient_role_required",
+            },
             status=status.HTTP_403_FORBIDDEN,
         )
-
-    serializer = ConsultationCreateSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
 
     patient_profile = getattr(request.user, "patient_profile", None)
     if patient_profile is None:
         return Response(
-            {"detail": "Patient profile not found."},
+            {
+                "detail": "patient_profile_unavailable",
+                "code": "patient_profile_unavailable",
+            },
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    consultation = serializer.save(
-        patient=patient_profile,
-        status=ConsultationStatus.SUBMITTED,
-        submitted_at=timezone.now(),
-    )
+    serializer = ConsultationCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    try:
+        result = create_patient_consultation(
+            patient=patient_profile,
+            doctor_id=values["doctor"],
+            description=values["description"],
+            client_request_id=values["client_request_id"],
+            priority=values["priority"],
+            specialty_id=values.get("specialty"),
+            expected_doctor_updated_at=values.get(
+                "expected_doctor_updated_at"
+            ),
+            request_id=getattr(request, "request_id", ""),
+        )
+    except ConsultationCreationError as error:
+        conflict_codes = {
+            "doctor_not_accepting",
+            "doctor_state_changed",
+            "specialty_inactive",
+            "duplicate_request",
+        }
+        response_status = (
+            status.HTTP_409_CONFLICT
+            if error.code in conflict_codes
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return Response(
+            {
+                "detail": error.code,
+                "code": error.code,
+                "fields": {error.field: [error.code]},
+            },
+            status=response_status,
+        )
 
-    output = ConsultationSerializer(consultation)
-    return Response(output.data, status=status.HTTP_201_CREATED)
+    output = ConsultationCreateResponseSerializer(
+        result.consultation,
+        context={"request": request},
+    )
+    return Response(
+        output.data,
+        status=(
+            status.HTTP_201_CREATED
+            if result.created
+            else status.HTTP_200_OK
+        ),
+    )
 
 
 @api_view(["GET"])

@@ -1,7 +1,9 @@
-from django.db.models import Q
+from django.db.models import Avg, Count, FloatField, Q
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -15,9 +17,11 @@ from apps.doctors.serializers import (
     DoctorAvailabilitySerializer,
     DoctorOwnProfileReadSerializer,
     DoctorOwnProfileUpdateSerializer,
+    DoctorSearchQuerySerializer,
     PublicDoctorDetailSerializer,
     PublicDoctorListSerializer,
 )
+from apps.reviews.models import ReviewStatus
 
 
 # ── My Profile ──────────────────────────────────────────────────────────────
@@ -82,7 +86,6 @@ def my_doctor_profile(request: Request) -> Response:
 # ── Doctor Dashboard Summary ────────────────────────────────────────────────
 
 
-from django.db.models import Q
 from apps.messaging.services import get_unread_message_counts
 from apps.notifications.models import Notification
 
@@ -142,76 +145,114 @@ def my_doctor_dashboard(request: Request) -> Response:
 # ── Public Doctor Directory ─────────────────────────────────────────────────
 
 
+class DoctorPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
+def _public_doctor_queryset():
+    published_reviews = Q(
+        consultations__review__status=ReviewStatus.PUBLISHED
+    )
+    return (
+        DoctorProfile.objects.select_related("user", "specialty")
+        .filter(
+            is_approved=True,
+            approval_status=DoctorProfile.ApprovalStatus.APPROVED,
+            user__is_active=True,
+            specialty__is_active=True,
+        )
+        .annotate(
+            average_rating=Coalesce(
+                Avg(
+                    "consultations__review__rating",
+                    filter=published_reviews,
+                ),
+                0.0,
+                output_field=FloatField(),
+            ),
+            total_reviews=Count(
+                "consultations__review",
+                filter=published_reviews,
+                distinct=True,
+            ),
+        )
+    )
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def public_doctor_list(request: Request) -> Response:
-    """List approved, active doctors.
+    """Paginated public directory of approved, active doctors."""
+    params = DoctorSearchQuerySerializer(data=request.query_params.dict())
+    params.is_valid(raise_exception=True)
+    values = params.validated_data
+    queryset = _public_doctor_queryset()
 
-    Filters:
-    - specialty (UUID)
-    - specialty_slug (str)
-    - accepting (bool) - exclude non-accepting when true
-    - language (str) - match in languages JSON array
-    - search (str) - name / professional_title match
-    - ordering (str) - default: years_of_experience
-    """
-    queryset = DoctorProfile.objects.select_related(
-        "user", "specialty"
-    ).filter(
-        is_approved=True,
-        user__is_active=True,
-        specialty__is_active=True,
-    )
-
-    specialty = request.query_params.get("specialty")
-    if specialty:
+    if specialty := values.get("specialty"):
         queryset = queryset.filter(specialty_id=specialty)
-
-    specialty_slug = request.query_params.get("specialty_slug")
-    if specialty_slug:
+    if specialty_slug := values.get("specialty_slug"):
         queryset = queryset.filter(specialty__slug=specialty_slug)
-
-    accepting = request.query_params.get("accepting")
-    if accepting and accepting.lower() in ("true", "1"):
-        queryset = queryset.filter(is_accepting_consultations=True)
-
-    language = request.query_params.get("language")
-    if language:
-        queryset = queryset.filter(languages__contains=[language])
-
-    search = request.query_params.get("search")
-    if search:
+    if "accepting" in values:
+        queryset = queryset.filter(
+            is_accepting_consultations=values["accepting"]
+        )
+    if language := values.get("language"):
+        queryset = queryset.filter(languages__icontains=language)
+    if min_experience := values.get("min_experience"):
+        queryset = queryset.filter(years_of_experience__gte=min_experience)
+    if values.get("min_fee") is not None:
+        queryset = queryset.filter(
+            consultation_fee__gte=values["min_fee"]
+        )
+    if values.get("max_fee") is not None:
+        queryset = queryset.filter(
+            consultation_fee__lte=values["max_fee"]
+        )
+    if max_response := values.get("max_response_minutes"):
+        queryset = queryset.filter(
+            estimated_response_minutes__lte=max_response
+        )
+    if search := values.get("search", "").strip():
         queryset = queryset.filter(
             Q(user__first_name__icontains=search)
             | Q(user__last_name__icontains=search)
             | Q(professional_title__icontains=search)
+            | Q(workplace_name__icontains=search)
+            | Q(qualifications__icontains=search)
+            | Q(specialty__name_en__icontains=search)
+            | Q(specialty__name_ar__icontains=search)
+            | Q(specialty__name_ckb__icontains=search)
         )
 
-    ordering = request.query_params.get("ordering", "years_of_experience")
-    if ordering.lstrip("-") not in (
-        "years_of_experience", "consultation_fee",
-        "user__first_name", "user__last_name",
-    ):
-        ordering = "years_of_experience"
-    queryset = queryset.order_by(ordering)
+    ordering_map = {
+        "relevance": (
+            "-is_accepting_consultations",
+            "estimated_response_minutes",
+            "user__first_name",
+            "user__last_name",
+        ),
+        "name": ("user__first_name", "user__last_name"),
+        "experience_desc": ("-years_of_experience", "user__first_name"),
+        "fee_asc": ("consultation_fee", "user__first_name"),
+        "fee_desc": ("-consultation_fee", "user__first_name"),
+        "response_time_asc": (
+            "estimated_response_minutes",
+            "user__first_name",
+        ),
+        "newest": ("-created_at",),
+    }
+    queryset = queryset.order_by(*ordering_map[values["ordering"]], "id")
 
-    page = request.query_params.get("page")
-    page_size = request.query_params.get("page_size", 20)
-    if page is not None:
-        from rest_framework.pagination import PageNumberPagination
-
-        class DoctorPagination(PageNumberPagination):
-            page_size = 20
-            page_size_query_param = "page_size"
-            max_page_size = 100
-
-        paginator = DoctorPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        serializer = PublicDoctorListSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    serializer = PublicDoctorListSerializer(queryset, many=True)
-    return Response(serializer.data)
+    paginator = DoctorPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = PublicDoctorListSerializer(
+        page,
+        many=True,
+        context={"request": request},
+    )
+    return paginator.get_paginated_response(serializer.data)
 
 
 @api_view(["GET"])
@@ -219,13 +260,34 @@ def public_doctor_list(request: Request) -> Response:
 def public_doctor_detail(request: Request, pk: str) -> Response:
     """Public profile of a single approved, active doctor."""
     profile = get_object_or_404(
-        DoctorProfile.objects.select_related("user", "specialty"),
+        DoctorProfile.objects.select_related("user", "specialty").annotate(
+            average_rating=Coalesce(
+                Avg(
+                    "consultations__review__rating",
+                    filter=Q(
+                        consultations__review__status=ReviewStatus.PUBLISHED
+                    ),
+                ),
+                0.0,
+                output_field=FloatField(),
+            ),
+            total_reviews=Count(
+                "consultations__review",
+                filter=Q(
+                    consultations__review__status=ReviewStatus.PUBLISHED
+                ),
+                distinct=True,
+            ),
+        ),
         pk=pk,
         is_approved=True,
+        approval_status=DoctorProfile.ApprovalStatus.APPROVED,
         user__is_active=True,
-        specialty__is_active=True,
     )
-    serializer = PublicDoctorDetailSerializer(profile)
+    serializer = PublicDoctorDetailSerializer(
+        profile,
+        context={"request": request},
+    )
     return Response(serializer.data)
 
 

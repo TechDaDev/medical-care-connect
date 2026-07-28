@@ -1,6 +1,8 @@
+import re
+
 from rest_framework import serializers
 
-from apps.consultations.models import Consultation, ConsultationStatus
+from apps.consultations.models import Consultation, ConsultationStatus, Priority
 
 
 class ConsultationSerializer(serializers.ModelSerializer):
@@ -62,49 +64,101 @@ class ConsultationSerializer(serializers.ModelSerializer):
         ]
 
 
-class ConsultationCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating a new consultation."""
+class ConsultationCreateSerializer(serializers.Serializer):
+    """Strict patient consultation-creation input."""
+
+    doctor = serializers.UUIDField()
+    description = serializers.CharField(
+        trim_whitespace=False,
+        max_length=2000,
+    )
+    client_request_id = serializers.UUIDField()
+    expected_doctor_updated_at = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+    )
+    specialty = serializers.UUIDField(required=False, allow_null=True)
+    priority = serializers.ChoiceField(
+        required=False,
+        choices=Priority.choices,
+        default=Priority.MEDIUM,
+    )
+
+    def validate_description(self, value: str) -> str:
+        normalized = re.sub(r"\s+", " ", value).strip()
+        meaningful = [character for character in normalized if character.isalnum()]
+        if len(meaningful) < 20:
+            raise serializers.ValidationError(
+                "description_too_short",
+                code="description_too_short",
+            )
+        if len({character.casefold() for character in meaningful}) <= 2:
+            raise serializers.ValidationError(
+                "description_not_meaningful",
+                code="description_not_meaningful",
+            )
+        return normalized
+
+    def validate(self, attrs):
+        allowed = set(self.fields)
+        unknown = set(self.initial_data) - allowed
+        if unknown:
+            raise serializers.ValidationError(
+                {
+                    field: ["unknown_field"]
+                    for field in sorted(unknown)
+                }
+            )
+        return attrs
+
+
+class ConsultationCreateResponseSerializer(serializers.ModelSerializer):
+    """Safe authoritative consultation-creation response."""
+
+    doctor = serializers.SerializerMethodField()
+    specialty = serializers.SerializerMethodField()
+    next_path = serializers.SerializerMethodField()
 
     class Meta:
         model = Consultation
         fields = [
+            "id",
+            "status",
             "doctor",
             "specialty",
-            "priority",
-            "description",
+            "created_at",
+            "submitted_at",
+            "next_path",
         ]
+        read_only_fields = fields
 
-    def validate_doctor(self, value):
-        if not value.is_approved:
-            raise serializers.ValidationError(
-                "This doctor is not approved to receive consultations."
-            )
-        if not value.is_accepting_consultations:
-            raise serializers.ValidationError(
-                "This doctor is not currently accepting consultations."
-            )
-        if not value.user.is_active:
-            raise serializers.ValidationError(
-                "This doctor account is not active."
-            )
-        if value.specialty_id and not value.specialty.is_active:
-            raise serializers.ValidationError(
-                "This doctor's specialty is not available for new consultations."
-            )
-        return value
+    def get_doctor(self, obj) -> dict:
+        return {
+            "id": obj.doctor_id,
+            "full_name": obj.doctor.user.full_name,
+        }
 
-    def validate(self, attrs):
-        doctor = attrs.get("doctor")
-        specialty = attrs.get("specialty")
-        if specialty and not specialty.is_active:
-            raise serializers.ValidationError(
-                {"specialty": "This specialty is not active."}
-            )
-        if doctor and specialty and doctor.specialty_id != specialty.id:
-            raise serializers.ValidationError(
-                {"specialty": "Specialty must match the selected doctor."}
-            )
-        return attrs
+    def get_specialty(self, obj) -> dict | None:
+        if obj.specialty is None:
+            return None
+        request = self.context.get("request")
+        locale = ""
+        if request is not None:
+            locale = request.headers.get("Accept-Language", "").split(",")[0]
+        locale = locale.lower().split("-")[0]
+        if locale == "ar":
+            name = obj.specialty.name_ar or obj.specialty.name
+        elif locale == "ckb":
+            name = obj.specialty.name_ckb or obj.specialty.name
+        else:
+            name = obj.specialty.name_en or obj.specialty.name
+        return {
+            "id": obj.specialty_id,
+            "name": name,
+        }
+
+    def get_next_path(self, obj) -> str:
+        return f"/app/patient/consultations/{obj.id}"
 
 
 class ConsultationCancelSerializer(serializers.Serializer):

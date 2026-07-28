@@ -75,6 +75,12 @@ class Consultation(BaseModel):
     submitted_at = models.DateTimeField(_("submitted at"), blank=True, null=True)
     accepted_at = models.DateTimeField(_("accepted at"), blank=True, null=True)
     cancelled_at = models.DateTimeField(_("cancelled at"), blank=True, null=True)
+    client_request_id = models.UUIDField(
+        _("client request ID"),
+        null=True,
+        blank=True,
+        help_text=_("Patient-scoped idempotency key for consultation creation."),
+    )
 
     class Meta:
         verbose_name = _("consultation")
@@ -85,6 +91,12 @@ class Consultation(BaseModel):
             models.Index(fields=["patient", "status"]),
             models.Index(fields=["doctor", "status"]),
             models.Index(fields=["specialty", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["patient", "client_request_id"],
+                name="consultation_unique_patient_request_id",
+            ),
         ]
 
     def __str__(self) -> str:

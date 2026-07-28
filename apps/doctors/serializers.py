@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 from django.db import transaction
 from rest_framework import serializers
@@ -63,6 +64,59 @@ class DoctorOwnProfileReadSerializer(serializers.ModelSerializer):
 
 
 ALLOWED_LANGUAGES = {"ar", "en", "ckb"}
+
+
+class DoctorSearchQuerySerializer(serializers.Serializer):
+    search = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    specialty = serializers.UUIDField(required=False)
+    specialty_slug = serializers.SlugField(required=False, max_length=255)
+    language = serializers.ChoiceField(required=False, choices=sorted(ALLOWED_LANGUAGES))
+    accepting = serializers.BooleanField(required=False)
+    min_experience = serializers.IntegerField(required=False, min_value=0, max_value=70)
+    min_fee = serializers.DecimalField(
+        required=False,
+        min_value=Decimal("0"),
+        max_digits=10,
+        decimal_places=2,
+    )
+    max_fee = serializers.DecimalField(
+        required=False,
+        min_value=Decimal("0"),
+        max_digits=10,
+        decimal_places=2,
+    )
+    max_response_minutes = serializers.IntegerField(
+        required=False, min_value=1, max_value=1440
+    )
+    ordering = serializers.ChoiceField(
+        required=False,
+        default="relevance",
+        choices=[
+            "relevance",
+            "name",
+            "experience_desc",
+            "fee_asc",
+            "fee_desc",
+            "response_time_asc",
+            "newest",
+        ],
+    )
+    page = serializers.IntegerField(required=False, min_value=1, default=1)
+    page_size = serializers.IntegerField(
+        required=False, min_value=1, max_value=50, default=20
+    )
+    locale = serializers.ChoiceField(
+        required=False, choices=["en", "ar", "ckb"]
+    )
+
+    def validate(self, attrs):
+        min_fee = attrs.get("min_fee")
+        max_fee = attrs.get("max_fee")
+        if min_fee is not None and max_fee is not None and min_fee > max_fee:
+            raise serializers.ValidationError(
+                {"max_fee": "max_fee_must_be_greater_than_min_fee"}
+            )
+        return attrs
 
 
 class DoctorOwnProfileUpdateSerializer(serializers.ModelSerializer):
@@ -200,65 +254,113 @@ class PublicDoctorListSerializer(serializers.ModelSerializer):
     """Public-facing serializer for the doctor directory (list)."""
 
     full_name = serializers.CharField(source="user.full_name", read_only=True)
-    first_name = serializers.CharField(source="user.first_name", read_only=True)
-    last_name = serializers.CharField(source="user.last_name", read_only=True)
-    specialty_name = serializers.CharField(
-        source="specialty.name", read_only=True, default=None
-    )
+    specialty = serializers.SerializerMethodField()
+    consultation_fee = serializers.SerializerMethodField()
+    average_rating = serializers.FloatField(read_only=True, default=0.0)
+    total_reviews = serializers.IntegerField(read_only=True, default=0)
+    profile_summary = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorProfile
         fields = [
             "id",
-            "first_name",
-            "last_name",
             "full_name",
             "specialty",
-            "specialty_name",
             "professional_title",
-            "qualifications",
-            "biography",
             "workplace_name",
             "years_of_experience",
             "consultation_fee",
             "languages",
             "is_accepting_consultations",
             "estimated_response_minutes",
+            "average_rating",
+            "total_reviews",
+            "profile_summary",
+            "available_actions",
         ]
         read_only_fields = fields
 
+    def _specialty_name(self, obj) -> str | None:
+        if obj.specialty is None:
+            return None
+        request = self.context.get("request")
+        locale = ""
+        if request is not None:
+            locale = request.query_params.get("locale", "")
+            if not locale:
+                locale = request.headers.get("Accept-Language", "").split(",")[0]
+        locale = locale.lower().split("-")[0]
+        if locale == "ar":
+            return obj.specialty.name_ar or obj.specialty.name
+        if locale == "ckb":
+            return obj.specialty.name_ckb or obj.specialty.name
+        return obj.specialty.name_en or obj.specialty.name
 
-class PublicDoctorDetailSerializer(serializers.ModelSerializer):
+    def get_specialty(self, obj) -> dict | None:
+        if obj.specialty is None:
+            return None
+        return {
+            "id": obj.specialty.id,
+            "slug": obj.specialty.slug,
+            "name": self._specialty_name(obj),
+        }
+
+    def get_consultation_fee(self, obj) -> dict | None:
+        if obj.consultation_fee is None:
+            return None
+        return {
+            "amount": format(obj.consultation_fee, ".2f"),
+            "currency": "USD",
+        }
+
+    def get_profile_summary(self, obj) -> str:
+        summary = " ".join((obj.biography or "").split())
+        return summary[:240]
+
+    def get_available_actions(self, obj) -> list[str]:
+        actions = ["view"]
+        if (
+            obj.is_accepting_consultations
+            and obj.user.is_active
+            and obj.is_approved
+            and obj.approval_status == DoctorProfile.ApprovalStatus.APPROVED
+            and obj.specialty is not None
+            and obj.specialty.is_active
+        ):
+            actions.append("start_consultation")
+        return actions
+
+
+class PublicDoctorDetailSerializer(PublicDoctorListSerializer):
     """Public-facing serializer for a single doctor profile (detail)."""
 
-    full_name = serializers.CharField(source="user.full_name", read_only=True)
-    first_name = serializers.CharField(source="user.first_name", read_only=True)
-    last_name = serializers.CharField(source="user.last_name", read_only=True)
-    specialty_name = serializers.CharField(
-        source="specialty.name", read_only=True, default=None
-    )
+    unavailable_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorProfile
-        fields = [
-            "id",
-            "first_name",
-            "last_name",
-            "full_name",
-            "specialty",
-            "specialty_name",
-            "professional_title",
+        fields = PublicDoctorListSerializer.Meta.fields + [
             "qualifications",
             "biography",
-            "workplace_name",
-            "years_of_experience",
-            "consultation_fee",
-            "languages",
-            "is_accepting_consultations",
-            "estimated_response_minutes",
             "created_at",
+            "updated_at",
+            "unavailable_reason",
         ]
         read_only_fields = fields
+
+    def get_unavailable_reason(self, obj) -> str | None:
+        if not obj.user.is_active:
+            return "account_inactive"
+        if (
+            not obj.is_approved
+            or obj.approval_status != DoctorProfile.ApprovalStatus.APPROVED
+        ):
+            return "profile_not_approved"
+        if obj.specialty is None or not obj.specialty.is_active:
+            return "specialty_inactive"
+        if not obj.is_accepting_consultations:
+            return "not_accepting_consultations"
+        return None
 
 
 class DoctorAvailabilitySerializer(serializers.ModelSerializer):

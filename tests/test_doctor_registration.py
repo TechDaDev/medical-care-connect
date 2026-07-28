@@ -77,7 +77,10 @@ class DoctorRegistrationTests(APITestCase):
         self.assertEqual(response.data["next_path"], "/app/doctor/pending-approval")
         self.assertNotIn("medical_license_number", response.data)
         self.assertNotIn("medical_license_document", response.data)
-        self.assertFalse(self.client.get(reverse("doctors:doctor-list")).data)
+        self.assertEqual(
+            self.client.get(reverse("doctors:doctor-list")).data["results"],
+            [],
+        )
         self.assertTrue(Notification.objects.filter(
             recipient=self.coordinator, notification_type=NotificationType.DOCTOR_APPLICATION
         ).exists())

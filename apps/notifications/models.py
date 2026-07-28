@@ -5,6 +5,7 @@ from apps.core.models import BaseModel
 
 
 class NotificationType(models.TextChoices):
+    NEW_CONSULTATION = "new_consultation", _("New Consultation")
     NEW_MESSAGE = "new_message", _("New Message")
     CONSULTATION_ACCEPTED = "consultation_accepted", _("Consultation Accepted")
     CONSULTATION_CANCELLED = "consultation_cancelled", _("Consultation Cancelled")

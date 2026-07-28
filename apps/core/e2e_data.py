@@ -10,6 +10,7 @@ from io import BytesIO
 from django.conf import settings
 from django.core.management.base import CommandError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts.models import User, UserRole
@@ -94,17 +95,27 @@ def seed(run_id: str, password: str) -> dict[str, int]:
     patient = PatientProfile.objects.create(user=patient_user, preferred_language="en")
 
     doctors: dict[str, DoctorProfile] = {}
-    for state in ("pending", "approved", "suspended"):
+    for state in ("pending", "approved", "suspended", "unavailable"):
         doctor_user = _user(run_id, state, UserRole.DOCTOR, password)
+        approval_status = (
+            DoctorProfile.ApprovalStatus.APPROVED
+            if state in {"approved", "unavailable"}
+            else state
+        )
         doctors[state] = DoctorProfile.objects.create(
             user=doctor_user,
             specialty=specialty,
             professional_title=f"Synthetic {state.title()} Doctor",
             license_number=f"{prefix}-{state}",
-            approval_status=state,
-            is_approved=state in {"approved", "suspended"},
+            approval_status=approval_status,
+            is_approved=state in {"approved", "suspended", "unavailable"},
             is_accepting_consultations=state == "approved",
             biography=f"{prefix} non-clinical fixture",
+            qualifications=f"{prefix} synthetic qualification",
+            workplace_name="Synthetic Medical Center",
+            years_of_experience=12 if state == "approved" else 7,
+            consultation_fee="75.00" if state == "approved" else "45.00",
+            estimated_response_minutes=45 if state == "approved" else 180,
             languages=["en", "ar", "ckb"],
         )
 
@@ -240,6 +251,14 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     prefix = marker(run_id)
     users = User.objects.filter(email__startswith=f"e2e+{run_id}+")
     user_ids = list(users.values_list("id", flat=True))
+    consultations = Consultation.objects.filter(
+        Q(description__startswith=prefix)
+        | Q(patient__user_id__in=user_ids)
+    )
+    consultation_ids = [
+        str(value)
+        for value in consultations.values_list("id", flat=True)
+    ]
     attachments = ConsultationAttachment.objects.filter(storage_key__startswith=f"{prefix}/")
     license_documents = LicenseDocument.objects.filter(doctor_profile__user_id__in=user_ids)
     keys = set(attachments.values_list("storage_key", flat=True))
@@ -258,7 +277,11 @@ def cleanup(run_id: str, *, verify: bool = True) -> dict[str, int]:
     license_documents.delete()
     OutstandingToken.objects.filter(user_id__in=user_ids).delete()
     AccountDeletionRequest.objects.filter(reason__startswith=prefix).delete()
-    Consultation.objects.filter(description__startswith=prefix).delete()
+    AuditEvent.objects.filter(
+        target_type="consultation",
+        target_id__in=consultation_ids,
+    ).delete()
+    consultations.delete()
     Notification.objects.filter(title__startswith=prefix).delete()
     users.delete()
     Specialty.objects.filter(slug=prefix).delete()

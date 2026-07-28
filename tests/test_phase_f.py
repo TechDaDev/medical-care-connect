@@ -32,7 +32,7 @@ class SyntheticFixtureTests(TestCase):
     def test_seed_and_cleanup_are_run_scoped(self):
         call_command("seed_e2e_data", run_id="phase-f-test")
         self.assertEqual(
-            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 8
+            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 9
         )
         self.assertEqual(
             Consultation.objects.filter(
