@@ -16,6 +16,7 @@ class AttachmentListSerializer(serializers.ModelSerializer):
     """Safe metadata for listing — no storage_key or path."""
 
     uploader_name = serializers.SerializerMethodField()
+    uploader_role = serializers.CharField(source="uploaded_by.role", read_only=True, default=None)
     actions = serializers.SerializerMethodField()
     category_label = serializers.SerializerMethodField()
     status_label = serializers.SerializerMethodField()
@@ -27,6 +28,7 @@ class AttachmentListSerializer(serializers.ModelSerializer):
             "id",
             "consultation_id",
             "uploader_name",
+            "uploader_role",
             "original_filename",
             "safe_display_name",
             "category",

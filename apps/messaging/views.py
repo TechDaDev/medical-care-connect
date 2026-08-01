@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Count, Q, QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -8,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import IsDoctor
+from apps.accounts.permissions import IsApprovedDoctor
 from apps.consultations.models import Consultation
 from apps.messaging.models import ConsultationMessage, DoctorInternalNote
 from apps.messaging.serializers import (
@@ -170,7 +171,7 @@ def unread_counts_all_view(request: Request) -> Response:
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def internal_note_list_create(request: Request, consultation_pk: str) -> Response:
     """List or create internal doctor notes for a consultation."""
     consultation = get_object_or_404(Consultation, pk=consultation_pk)
@@ -187,23 +188,54 @@ def internal_note_list_create(request: Request, consultation_pk: str) -> Respons
         notes = DoctorInternalNote.objects.filter(
             consultation=consultation
         ).select_related("author").order_by("-created_at")
-        serializer = InternalNoteSerializer(notes, many=True)
-        return Response(serializer.data)
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = "page_size"
+        paginator.max_page_size = 50
+        page = paginator.paginate_queryset(notes, request)
+        serializer = InternalNoteSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     # POST
     serializer = InternalNoteCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    note = DoctorInternalNote.objects.create(
-        consultation=consultation,
-        author=request.user,
-        content=serializer.validated_data["content"],
-    )
+    from apps.core.audit_service import create_audit_event
+    from apps.core.models import AuditEventCategory
+
+    with transaction.atomic():
+        note, created = DoctorInternalNote.objects.get_or_create(
+            author=request.user,
+            client_request_id=serializer.validated_data["client_request_id"],
+            defaults={
+                "consultation": consultation,
+                "content": serializer.validated_data["content"],
+            },
+        )
+        if note.consultation_id != consultation.id:
+            return Response(
+                {"detail": "client_request_id_conflict", "code": "client_request_id_conflict"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if created:
+            create_audit_event(
+                "doctor_internal_note_created",
+                AuditEventCategory.CONSULTATION,
+                actor_id=str(request.user.id),
+                actor_role=request.user.role,
+                target_type="consultation",
+                target_id=str(consultation.id),
+                request_id=getattr(request, "request_id", ""),
+                metadata={"note_id": str(note.id)},
+            )
     output = InternalNoteSerializer(note)
-    return Response(output.data, status=status.HTTP_201_CREATED)
+    return Response(
+        output.data,
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET", "DELETE"])
-@permission_classes([IsAuthenticated, IsDoctor])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
 def internal_note_detail(request: Request, consultation_pk: str, note_pk: str) -> Response:
     """Get or delete a specific internal note."""
     consultation = get_object_or_404(Consultation, pk=consultation_pk)

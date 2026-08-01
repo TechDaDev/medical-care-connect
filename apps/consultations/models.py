@@ -74,6 +74,7 @@ class Consultation(BaseModel):
     )
     submitted_at = models.DateTimeField(_("submitted at"), blank=True, null=True)
     accepted_at = models.DateTimeField(_("accepted at"), blank=True, null=True)
+    completed_at = models.DateTimeField(_("completed at"), blank=True, null=True)
     cancelled_at = models.DateTimeField(_("cancelled at"), blank=True, null=True)
     client_request_id = models.UUIDField(
         _("client request ID"),
@@ -101,6 +102,46 @@ class Consultation(BaseModel):
 
     def __str__(self) -> str:
         return f"Consultation {self.id} - {self.patient} -> Dr. {self.doctor}"
+
+
+class DoctorConsultationAction(BaseModel):
+    """Append-only doctor workflow event and idempotency marker."""
+
+    consultation = models.ForeignKey(
+        Consultation,
+        on_delete=models.CASCADE,
+        related_name="doctor_actions",
+    )
+    actor = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.PROTECT,
+        related_name="doctor_consultation_actions",
+    )
+    action = models.CharField(max_length=40)
+    old_status = models.CharField(max_length=30, choices=ConsultationStatus.choices)
+    new_status = models.CharField(max_length=30, choices=ConsultationStatus.choices)
+    reason = models.TextField(blank=True, max_length=1000)
+    target_doctor = models.ForeignKey(
+        "doctors.DoctorProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="received_doctor_actions",
+    )
+    client_request_id = models.UUIDField()
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["actor", "client_request_id"],
+                name="doctor_action_unique_actor_request_id",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["consultation", "created_at"]),
+            models.Index(fields=["consultation", "action"]),
+        ]
 
 
 class ConsultationTransfer(BaseModel):

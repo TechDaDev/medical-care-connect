@@ -103,6 +103,9 @@ class DoctorInternalNote(BaseModel):
         verbose_name=_("author"),
     )
     content = models.TextField(_("content"), max_length=5000)
+    client_request_id = models.UUIDField(
+        _("client request ID"), null=True, blank=True
+    )
 
     class Meta:
         verbose_name = _("doctor internal note")
@@ -111,6 +114,12 @@ class DoctorInternalNote(BaseModel):
         indexes = [
             models.Index(fields=["consultation"]),
             models.Index(fields=["author"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["author", "client_request_id"],
+                name="internal_note_unique_author_request_id",
+            ),
         ]
 
     def __str__(self) -> str:

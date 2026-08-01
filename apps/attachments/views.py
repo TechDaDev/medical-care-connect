@@ -61,7 +61,13 @@ def _is_participant(user, consultation) -> bool:
             return False
     if user.role == UserRole.DOCTOR:
         try:
-            return consultation.doctor.user == user
+            profile = consultation.doctor
+            return bool(
+                profile.user == user
+                and user.is_active
+                and profile.is_approved
+                and profile.approval_status == profile.ApprovalStatus.APPROVED
+            )
         except AttributeError:
             return False
     return False
@@ -115,6 +121,18 @@ def upload_attachment(request, consultation_id):
                 {"detail": "Cannot upload to a cancelled consultation.",
                  "code": "attachment_permission_denied"},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+    if user.role == UserRole.DOCTOR:
+        from apps.consultations.doctor_actions import doctor_action_policy
+        policy = doctor_action_policy(consultation, consultation.doctor)
+        if not policy.actions["can_upload_attachment"]:
+            return Response(
+                {
+                    "detail": policy.reasons["attachment"],
+                    "code": policy.reasons["attachment"],
+                },
+                status=status.HTTP_409_CONFLICT,
             )
 
     serializer = AttachmentUploadSerializer(data=request.data)
@@ -272,7 +290,13 @@ def list_attachments(request, consultation_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    qs = ConsultationAttachment.objects.filter(
+    qs = ConsultationAttachment.objects.select_related(
+        "uploaded_by",
+        "consultation__doctor__user",
+        "consultation__patient__user",
+        "consultation__medical_record",
+        "consultation__intake_session",
+    ).filter(
         consultation=consultation,
         is_deleted=False,
     ).order_by("-created_at")
@@ -439,6 +463,14 @@ def delete_attachment(request, attachment_id):
             return Response(
                 {"detail": "Can only delete own uploads.", "code": "attachment_permission_denied"},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+        from apps.consultations.doctor_actions import doctor_action_policy
+        if not doctor_action_policy(
+            attachment.consultation, attachment.consultation.doctor
+        ).actions["can_upload_attachment"]:
+            return Response(
+                {"detail": "attachment_action_closed", "code": "attachment_action_closed"},
+                status=status.HTTP_409_CONFLICT,
             )
 
     # Soft delete

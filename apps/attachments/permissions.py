@@ -46,6 +46,8 @@ def get_attachment_actions(attachment, user) -> dict:
         "can_delete": False,
         "can_restore": False,
         "can_view_audit": False,
+        "download_unavailable_reason": "attachment_not_available",
+        "delete_unavailable_reason": "attachment_action_closed",
     }
     consultation = attachment.consultation
 
@@ -54,15 +56,27 @@ def get_attachment_actions(attachment, user) -> dict:
         result["can_delete"] = not attachment.is_deleted
         result["can_restore"] = attachment.is_deleted
         result["can_view_audit"] = True
+        result["download_unavailable_reason"] = None if result["can_download"] else "attachment_not_available"
+        result["delete_unavailable_reason"] = None if result["can_delete"] else "attachment_action_closed"
         return result
 
     is_patient = user.role == UserRole.PATIENT and consultation.patient.user == user
     is_doctor = user.role == UserRole.DOCTOR and consultation.doctor.user == user
+    if is_doctor:
+        profile = consultation.doctor
+        is_doctor = bool(
+            user.is_active
+            and profile.is_approved
+            and profile.approval_status == profile.ApprovalStatus.APPROVED
+        )
 
     if not (is_patient or is_doctor):
         return result
 
     result["can_download"] = attachment.is_available
+    result["download_unavailable_reason"] = (
+        None if result["can_download"] else "attachment_not_available"
+    )
 
     if is_patient:
         from apps.consultations.models import ConsultationStatus as CS
@@ -72,9 +86,17 @@ def get_attachment_actions(attachment, user) -> dict:
             and consultation.status in (CS.SUBMITTED, CS.DRAFT)
         )
     elif is_doctor:
+        from apps.consultations.doctor_actions import doctor_action_policy
         result["can_delete"] = (
             not attachment.is_deleted
             and attachment.uploaded_by == user
+            and doctor_action_policy(consultation, consultation.doctor).actions[
+                "can_upload_attachment"
+            ]
         )
+
+    result["delete_unavailable_reason"] = (
+        None if result["can_delete"] else "attachment_action_closed"
+    )
 
     return result

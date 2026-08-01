@@ -40,6 +40,7 @@ def _create_doctor_profile(user):
         user=user,
         license_number="LIC123",
         is_approved=True,
+        approval_status=DoctorProfile.ApprovalStatus.APPROVED,
     )
 
 

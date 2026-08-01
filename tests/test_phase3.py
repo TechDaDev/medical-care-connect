@@ -240,7 +240,10 @@ class ConsultationTests(TestCase):
         self.assertEqual(resp.status_code, 403)
 
         # Correct doctor
-        resp = _jpost(self.client, url, {}, **self._doc_auth)
+        resp = _jpost(self.client, url, {
+            "expected_status": "submitted",
+            "client_request_id": str(uuid4()),
+        }, **self._doc_auth)
         self.assertEqual(resp.status_code, 200)
         c.refresh_from_db()
         self.assertEqual(c.status, ConsultationStatus.ACCEPTED)

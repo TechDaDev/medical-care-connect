@@ -3,6 +3,8 @@
 Hard limit: 10 tests total.
 """
 
+from uuid import uuid4
+
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -41,6 +43,7 @@ class Phase5MessagingTests(APITestCase):
             user=cls.doctor_user, specialty=cls.specialty,
             professional_title="Cardiologist", license_number="LIC-MSG-001",
             consultation_fee=100, is_approved=True,
+            approval_status=DoctorProfile.ApprovalStatus.APPROVED,
             is_accepting_consultations=True,
         )
         cls.consultation = Consultation.objects.create(
@@ -147,7 +150,10 @@ class Phase5MessagingTests(APITestCase):
         # Create
         resp = self.client.post(
             f"/api/messaging/{self.consultation.id}/internal-notes/",
-            {"content": "Patient seems anxious"},
+            {
+                "content": "Synthetic internal note content",
+                "client_request_id": str(uuid4()),
+            },
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         note_id = resp.data["id"]
@@ -157,7 +163,7 @@ class Phase5MessagingTests(APITestCase):
             f"/api/messaging/{self.consultation.id}/internal-notes/"
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(len(resp.data["results"]), 1)
 
         # Delete
         resp = self.client.delete(

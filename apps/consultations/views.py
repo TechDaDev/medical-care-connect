@@ -1,6 +1,6 @@
 from django.db import transaction
 from django.db.models import (
-    Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
+    Case, Count, IntegerField, Max, OuterRef, Q, Subquery, Value, When,
 )
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
@@ -18,6 +18,19 @@ from apps.ai_intake.serializers import StartIntakeResponseSerializer
 from apps.ai_intake.services.base import AIProviderDisabled
 from apps.ai_intake.services.intake import start_intake_session
 from apps.consultations.models import Consultation, ConsultationStatus
+from apps.consultations.doctor_actions import (
+    DOCTOR_ACTION_STATUSES,
+    STATUS_GROUPS,
+    DoctorWorkflowError,
+    perform_doctor_action,
+)
+from apps.consultations.doctor_serializers import (
+    DoctorAcceptSerializer,
+    DoctorConsultationDetailSerializer,
+    DoctorConsultationQueueSerializer,
+    DoctorIntakeSerializer,
+    DoctorTransitionSerializer,
+)
 from apps.consultations.serializers import (
     ConsultationCancelSerializer,
     ConsultationCreateSerializer,
@@ -100,6 +113,169 @@ class PatientConsultationPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
+
+
+class DoctorConsultationPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
+def _doctor_unread_subquery(user):
+    from apps.messaging.models import ConsultationMessage
+
+    return (
+        ConsultationMessage.objects
+        .filter(consultation_id=OuterRef("pk"))
+        .exclude(sender=user)
+        .exclude(read_receipts__user=user)
+        .values("consultation_id")
+        .annotate(total=Count("id", distinct=True))
+        .values("total")[:1]
+    )
+
+
+def _doctor_consultation_queryset(user):
+    from apps.attachments.choices import AttachmentStatus, ScanStatus
+
+    return (
+        Consultation.objects
+        .filter(doctor=user.doctor_profile)
+        .select_related(
+            "patient__user", "doctor__user", "doctor__specialty", "specialty",
+            "intake_session", "medical_record",
+        )
+        .prefetch_related("doctor_actions")
+        .annotate(
+            unread_messages=Coalesce(
+                Subquery(_doctor_unread_subquery(user)), Value(0)
+            ),
+            last_message_at=Max("messages__sent_at"),
+            attachment_count=Count(
+                "attachments", filter=Q(attachments__is_deleted=False), distinct=True
+            ),
+            attachment_total=Count(
+                "attachments", filter=Q(attachments__is_deleted=False), distinct=True
+            ),
+            attachment_available=Count(
+                "attachments",
+                filter=Q(
+                    attachments__is_deleted=False,
+                    attachments__status=AttachmentStatus.AVAILABLE,
+                ),
+                distinct=True,
+            ),
+            attachment_pending=Count(
+                "attachments",
+                filter=Q(
+                    attachments__is_deleted=False,
+                    attachments__scan_status=ScanStatus.PENDING,
+                ),
+                distinct=True,
+            ),
+            attachment_quarantined=Count(
+                "attachments",
+                filter=Q(attachments__status=AttachmentStatus.QUARANTINED),
+                distinct=True,
+            ),
+            attachment_rejected=Count(
+                "attachments",
+                filter=Q(attachments__status=AttachmentStatus.REJECTED),
+                distinct=True,
+            ),
+            internal_note_count=Count("internal_notes", distinct=True),
+            latest_internal_note_at=Max("internal_notes__created_at"),
+        )
+    )
+
+
+def _filter_doctor_consultations(queryset, request):
+    params = request.query_params
+    if params.get("status"):
+        queryset = queryset.filter(status=params["status"])
+    if params.get("status_group"):
+        statuses = STATUS_GROUPS.get(params["status_group"])
+        queryset = queryset.filter(status__in=statuses or [])
+    for parameter, field in (
+        ("priority", "priority"),
+        ("patient", "patient_id"),
+        ("specialty", "specialty_id"),
+        ("created_after", "created_at__gte"),
+        ("created_before", "created_at__lte"),
+    ):
+        if params.get(parameter):
+            queryset = queryset.filter(**{field: params[parameter]})
+    if params.get("needs_doctor_action", "").lower() == "true":
+        queryset = queryset.filter(
+            Q(status__in=DOCTOR_ACTION_STATUSES) | Q(unread_messages__gt=0)
+        )
+    if params.get("has_unread_messages", "").lower() == "true":
+        queryset = queryset.filter(unread_messages__gt=0)
+    if params.get("has_completed_intake", "").lower() == "true":
+        queryset = queryset.filter(
+            intake_session__status__in=["ready_for_review", "confirmed"]
+        )
+    if params.get("has_medical_record", "").lower() == "true":
+        queryset = queryset.filter(medical_record__isnull=False)
+
+    search = params.get("search", "").strip()
+    if search:
+        query = (
+            Q(patient__user__first_name__icontains=search)
+            | Q(patient__user__last_name__icontains=search)
+            | Q(specialty__name__icontains=search)
+            | Q(specialty__name_en__icontains=search)
+            | Q(specialty__name_ar__icontains=search)
+            | Q(specialty__name_ckb__icontains=search)
+        )
+        try:
+            import uuid
+            query |= Q(id=uuid.UUID(search))
+        except ValueError:
+            pass
+        queryset = queryset.filter(query)
+
+    ordering = params.get("ordering")
+    allowed = {
+        "created_at", "-created_at", "updated_at", "-updated_at",
+        "submitted_at", "-submitted_at", "priority", "-priority",
+    }
+    if ordering in allowed:
+        return queryset.order_by(ordering, "-updated_at")
+    return queryset.annotate(
+        emergency_rank=Case(
+            When(status=ConsultationStatus.EMERGENCY_ESCALATED, then=Value(0)),
+            When(priority="urgent", then=Value(1)),
+            default=Value(2), output_field=IntegerField(),
+        ),
+        action_rank=Case(
+            When(status__in=DOCTOR_ACTION_STATUSES, then=Value(0)),
+            default=Value(1), output_field=IntegerField(),
+        ),
+        unread_rank=Case(
+            When(unread_messages__gt=0, then=Value(0)),
+            default=Value(1), output_field=IntegerField(),
+        ),
+    ).order_by("emergency_rank", "action_rank", "unread_rank", "-updated_at")
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_consultation_queue(request: Request) -> Response:
+    queryset = _filter_doctor_consultations(
+        _doctor_consultation_queryset(request.user), request
+    )
+    paginator = DoctorConsultationPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = DoctorConsultationQueueSerializer(
+        page,
+        many=True,
+        context={
+            "request": request,
+            "doctor": request.user.doctor_profile,
+        },
+    )
+    return paginator.get_paginated_response(serializer.data)
 
 
 def _filter_patient_consultations(queryset, request):
@@ -327,41 +503,113 @@ def consultation_detail(request: Request, pk: str) -> Response:
     return Response(serializer.data)
 
 
+def _doctor_detail_response(request: Request, pk) -> Response:
+    consultation = get_object_or_404(
+        _doctor_consultation_queryset(request.user), pk=pk
+    )
+    serializer = DoctorConsultationDetailSerializer(
+        consultation,
+        context={
+            "request": request,
+            "doctor": request.user.doctor_profile,
+        },
+    )
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_consultation_detail(request: Request, pk: str) -> Response:
+    return _doctor_detail_response(request, pk)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_consultation_intake(request: Request, pk: str) -> Response:
+    consultation = get_object_or_404(
+        _doctor_consultation_queryset(request.user).prefetch_related(
+            "intake_session__messages"
+        ),
+        pk=pk,
+    )
+    try:
+        session = consultation.intake_session
+    except AttributeError:
+        return Response(
+            {"detail": "intake_not_found", "code": "intake_not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    serializer = DoctorIntakeSerializer(
+        session,
+        context={"doctor": request.user.doctor_profile},
+    )
+    return Response(serializer.data)
+
+
 # ── Consultation Actions ────────────────────────────────────────────────────
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsApprovedDoctor])
 def accept_consultation(request: Request, pk: str) -> Response:
-    """Accept a consultation. Only the assigned doctor can accept."""
-    consultation = get_object_or_404(
-        Consultation.objects.select_related("patient__user", "doctor__user", "specialty"),
-        pk=pk,
-    )
-
-    doctor_profile = getattr(request.user, "doctor_profile", None)
-    if doctor_profile is None or consultation.doctor != doctor_profile:
-        return Response(
-            {"detail": "You are not the assigned doctor for this consultation."},
-            status=status.HTTP_403_FORBIDDEN,
+    """Accept assigned consultation with locking and idempotency."""
+    serializer = DoctorAcceptSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    try:
+        perform_doctor_action(
+            consultation_id=pk,
+            doctor=request.user.doctor_profile,
+            actor=request.user,
+            action="accept",
+            client_request_id=values["client_request_id"],
+            expected_status=values["expected_status"],
+            expected_updated_at=values.get("expected_updated_at"),
+            request_id=getattr(request, "request_id", ""),
         )
-
-    if consultation.status != ConsultationStatus.SUBMITTED:
+    except Consultation.DoesNotExist:
         return Response(
-            {"detail": f"Cannot accept consultation in status '{consultation.get_status_display()}'."},
-            status=status.HTTP_400_BAD_REQUEST,
+            {"detail": "not_found", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
         )
+    except DoctorWorkflowError as error:
+        return Response(
+            {"detail": error.code, "code": error.code},
+            status=error.http_status,
+        )
+    return _doctor_detail_response(request, pk)
 
-    consultation.status = ConsultationStatus.ACCEPTED
-    consultation.accepted_at = timezone.now()
-    consultation.save(update_fields=["status", "accepted_at", "updated_at"])
 
-    # Notify patient
-    from apps.notifications.services import notify_consultation_accepted
-    notify_consultation_accepted(consultation)
-
-    serializer = ConsultationSerializer(consultation)
-    return Response(serializer.data)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_consultation_transition(request: Request, pk: str) -> Response:
+    serializer = DoctorTransitionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    try:
+        consultation, _ = perform_doctor_action(
+            consultation_id=pk,
+            doctor=request.user.doctor_profile,
+            actor=request.user,
+            action=values["action"],
+            client_request_id=values["client_request_id"],
+            expected_status=values["expected_status"],
+            expected_updated_at=values.get("expected_updated_at"),
+            reason=values.get("reason", ""),
+            target_doctor_id=values.get("target_doctor_id"),
+            request_id=getattr(request, "request_id", ""),
+        )
+    except Consultation.DoesNotExist:
+        return Response(
+            {"detail": "not_found", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except DoctorWorkflowError as error:
+        return Response(
+            {"detail": error.code, "code": error.code},
+            status=error.http_status,
+        )
+    return _doctor_detail_response(request, consultation.id)
 
 
 @api_view(["POST"])

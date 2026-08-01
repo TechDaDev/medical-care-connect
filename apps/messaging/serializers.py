@@ -87,32 +87,35 @@ class UnreadCountSerializer(serializers.Serializer):
 class InternalNoteSerializer(serializers.ModelSerializer):
     """Serializes a doctor internal note."""
 
-    author_email = serializers.EmailField(source="author.email", read_only=True)
-    author_name = serializers.SerializerMethodField()
+    author = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorInternalNote
         fields = [
-            "id", "consultation", "author", "author_email", "author_name",
-            "content", "created_at", "updated_at",
+            "id", "author", "content", "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "author", "author_email", "author_name",
-            "created_at", "updated_at",
+            "id", "author", "created_at", "updated_at",
         ]
 
-    def get_author_name(self, obj) -> str:
-        return obj.author.full_name
+    def get_author(self, obj) -> dict:
+        return {
+            "id": obj.author_id,
+            "display_name": obj.author.full_name,
+            "role": obj.author.role,
+        }
 
 
-class InternalNoteCreateSerializer(serializers.ModelSerializer):
+class InternalNoteCreateSerializer(serializers.Serializer):
     """Creates an internal note."""
 
-    class Meta:
-        model = DoctorInternalNote
-        fields = ["content"]
+    content = serializers.CharField(
+        trim_whitespace=True, min_length=10, max_length=5000
+    )
+    client_request_id = serializers.UUIDField()
 
     def validate_content(self, value):
-        if len(value) > 5000:
-            raise serializers.ValidationError("Content cannot exceed 5000 characters.")
-        return value
+        normalized = " ".join(value.split())
+        if len([character for character in normalized if character.isalnum()]) < 10:
+            raise serializers.ValidationError("note_too_short")
+        return normalized
