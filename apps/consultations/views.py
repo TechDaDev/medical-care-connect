@@ -135,12 +135,12 @@ def _doctor_unread_subquery(user):
     )
 
 
-def _doctor_consultation_queryset(user):
+def _doctor_consultation_queryset(user, *, assigned_only=True):
     from apps.attachments.choices import AttachmentStatus, ScanStatus
 
     return (
         Consultation.objects
-        .filter(doctor=user.doctor_profile)
+        .filter(**({"doctor": user.doctor_profile} if assigned_only else {}))
         .select_related(
             "patient__user", "doctor__user", "doctor__specialty", "specialty",
             "intake_session", "medical_record",
@@ -503,9 +503,9 @@ def consultation_detail(request: Request, pk: str) -> Response:
     return Response(serializer.data)
 
 
-def _doctor_detail_response(request: Request, pk) -> Response:
+def _doctor_detail_response(request: Request, pk, *, assigned_only=True) -> Response:
     consultation = get_object_or_404(
-        _doctor_consultation_queryset(request.user), pk=pk
+        _doctor_consultation_queryset(request.user, assigned_only=assigned_only), pk=pk
     )
     serializer = DoctorConsultationDetailSerializer(
         consultation,
@@ -597,6 +597,9 @@ def doctor_consultation_transition(request: Request, pk: str) -> Response:
             expected_updated_at=values.get("expected_updated_at"),
             reason=values.get("reason", ""),
             target_doctor_id=values.get("target_doctor_id"),
+            outcome=values.get("outcome"),
+            medical_record_id=values.get("medical_record_id"),
+            confirmation=values.get("confirmation"),
             request_id=getattr(request, "request_id", ""),
         )
     except Consultation.DoesNotExist:
@@ -609,7 +612,11 @@ def doctor_consultation_transition(request: Request, pk: str) -> Response:
             {"detail": error.code, "code": error.code},
             status=error.http_status,
         )
-    return _doctor_detail_response(request, consultation.id)
+    return _doctor_detail_response(
+        request,
+        consultation.id,
+        assigned_only=values["action"] != "transfer",
+    )
 
 
 @api_view(["POST"])

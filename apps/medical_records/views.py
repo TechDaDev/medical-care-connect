@@ -1,4 +1,7 @@
+from uuid import UUID
+
 from django.db import transaction
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -6,15 +9,194 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 
-from apps.accounts.permissions import IsPatient
+from apps.accounts.permissions import IsApprovedDoctor, IsPatient
+from apps.consultations.models import Consultation
+from apps.medical_records.doctor_services import (
+    MedicalRecordWorkflowError,
+    finalize_record,
+    get_or_create_record,
+    update_record,
+)
 from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.medical_records.serializers import (
     MedicalRecordDraftSerializer,
     MedicalRecordDraftUpdateSerializer,
     PatientMedicalRecordSerializer,
     RecordConfirmSerializer,
+    CreateMedicalRecordSerializer,
+    DoctorMedicalRecordDetailSerializer,
+    DoctorMedicalRecordListSerializer,
+    DoctorMedicalRecordQuerySerializer,
+    FinalizeDoctorMedicalRecordSerializer,
+    UpdateDoctorMedicalRecordSerializer,
 )
+
+
+class DoctorMedicalRecordPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+def _workflow_error(error):
+    body = {"detail": error.code, "code": error.code}
+    if error.details:
+        body["errors"] = error.details
+    return Response(body, status=error.http_status)
+
+
+def _doctor_record_queryset(user):
+    return MedicalRecordDraft.objects.filter(
+        consultation__doctor=user.doctor_profile
+    ).select_related(
+        "consultation__patient__user",
+        "consultation__doctor__user",
+        "consultation__specialty",
+        "intake_session",
+        "created_by",
+        "finalized_by",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_medical_record_list(request: Request) -> Response:
+    query = DoctorMedicalRecordQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    values = query.validated_data
+    records = _doctor_record_queryset(request.user)
+    if value := values.get("record_status"):
+        records = records.filter(status=value)
+    if value := values.get("consultation_status"):
+        records = records.filter(consultation__status=value)
+    if value := values.get("patient"):
+        records = records.filter(consultation__patient_id=value)
+    if value := values.get("specialty"):
+        records = records.filter(consultation__specialty_id=value)
+    if "needs_doctor_action" in request.query_params:
+        records = records.filter(
+            status=RecordStatus.DRAFT if values["needs_doctor_action"] else RecordStatus.FINALIZED
+        )
+    if value := values.get("created_after"):
+        records = records.filter(created_at__date__gte=value)
+    if value := values.get("created_before"):
+        records = records.filter(created_at__date__lte=value)
+    if value := values.get("updated_after"):
+        records = records.filter(updated_at__date__gte=value)
+    if search := values.get("search"):
+        try:
+            identifier = UUID(search)
+        except (ValueError, TypeError, AttributeError):
+            identifier = None
+        if identifier:
+            records = records.filter(Q(id=identifier) | Q(consultation_id=identifier))
+        else:
+            records = records.filter(
+                Q(consultation__patient__user__first_name__icontains=search)
+                | Q(consultation__patient__user__last_name__icontains=search)
+                | Q(consultation__specialty__name__icontains=search)
+            )
+    if ordering := values.get("ordering"):
+        records = records.order_by(ordering)
+    else:
+        records = records.annotate(
+            action_rank=Case(
+                When(status=RecordStatus.DRAFT, then=Value(0)),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        ).order_by("action_rank", "-updated_at")
+    paginator = DoctorMedicalRecordPagination()
+    page = paginator.paginate_queryset(records, request)
+    return paginator.get_paginated_response(
+        DoctorMedicalRecordListSerializer(page, many=True).data
+    )
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def doctor_medical_record_detail(request: Request, record_id) -> Response:
+    if request.method == "GET":
+        record = get_object_or_404(_doctor_record_queryset(request.user), pk=record_id)
+    else:
+        serializer = UpdateDoctorMedicalRecordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        try:
+            record, _ = update_record(
+                record_id=record_id,
+                doctor=request.user.doctor_profile,
+                actor=request.user,
+                values=values["doctor_authored"],
+                expected_version=values["expected_version"],
+                client_request_id=values["client_request_id"],
+                request_id=getattr(request, "request_id", ""),
+            )
+        except MedicalRecordDraft.DoesNotExist:
+            return Response(
+                {"detail": "medical_record_not_found", "code": "medical_record_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except MedicalRecordWorkflowError as error:
+            return _workflow_error(error)
+        record = get_object_or_404(_doctor_record_queryset(request.user), pk=record.pk)
+    return Response(DoctorMedicalRecordDetailSerializer(record).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def create_consultation_medical_record(request: Request, consultation_id) -> Response:
+    serializer = CreateMedicalRecordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        record, created = get_or_create_record(
+            consultation_id=consultation_id,
+            doctor=request.user.doctor_profile,
+            actor=request.user,
+            client_request_id=serializer.validated_data["client_request_id"],
+            request_id=getattr(request, "request_id", ""),
+        )
+    except Consultation.DoesNotExist:
+        return Response(
+            {"detail": "not_found", "code": "not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except MedicalRecordWorkflowError as error:
+        return _workflow_error(error)
+    record = get_object_or_404(_doctor_record_queryset(request.user), pk=record.pk)
+    return Response(
+        DoctorMedicalRecordDetailSerializer(record).data,
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsApprovedDoctor])
+def finalize_doctor_medical_record(request: Request, record_id) -> Response:
+    serializer = FinalizeDoctorMedicalRecordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    try:
+        record, _ = finalize_record(
+            record_id=record_id,
+            doctor=request.user.doctor_profile,
+            actor=request.user,
+            expected_version=values["expected_version"],
+            client_request_id=values["client_request_id"],
+            confirmation=values["confirmation"],
+            request_id=getattr(request, "request_id", ""),
+        )
+    except MedicalRecordDraft.DoesNotExist:
+        return Response(
+            {"detail": "medical_record_not_found", "code": "medical_record_not_found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except MedicalRecordWorkflowError as error:
+        return _workflow_error(error)
+    record = get_object_or_404(_doctor_record_queryset(request.user), pk=record.pk)
+    return Response(DoctorMedicalRecordDetailSerializer(record).data)
 
 
 # ── Get / Update Draft Record ──────────────────────────────────────────────
@@ -50,6 +232,15 @@ def draft_record(request: Request, record_id) -> Response:
         )
 
     if request.method == "GET":
+        if (
+            is_owner
+            and record.status != RecordStatus.FINALIZED
+            and record.created_by_id is not None
+        ):
+            return Response(
+                {"detail": "medical_record_not_found", "code": "medical_record_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         serializer_class = (
             PatientMedicalRecordSerializer
             if is_owner
@@ -63,6 +254,15 @@ def draft_record(request: Request, record_id) -> Response:
         return Response(
             {"detail": "Only the assigned doctor can update this record."},
             status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if record.created_by_id is not None:
+        return Response(
+            {
+                "detail": "use_doctor_medical_record_endpoint",
+                "code": "use_doctor_medical_record_endpoint",
+            },
+            status=status.HTTP_409_CONFLICT,
         )
 
     if record.status == RecordStatus.FINALIZED:
@@ -94,6 +294,12 @@ def confirm_record(request: Request, record_id) -> Response:
 
     serializer = RecordConfirmSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
+
+    if record.created_by_id is not None:
+        return Response(
+            {"detail": "doctor_finalization_required", "code": "doctor_finalization_required"},
+            status=status.HTTP_409_CONFLICT,
+        )
 
     with transaction.atomic():
         if not serializer.validated_data["confirmed"]:

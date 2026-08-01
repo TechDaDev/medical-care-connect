@@ -217,7 +217,8 @@ def my_medical_records(request: Request) -> Response:
     query_serializer.is_valid(raise_exception=True)
     filters = query_serializer.validated_data
     records = MedicalRecordDraft.objects.filter(
-        consultation__patient=profile
+        consultation__patient=profile,
+        status=RecordStatus.FINALIZED,
     ).select_related(
         "consultation__doctor__user",
         "consultation__specialty",
@@ -271,6 +272,7 @@ def my_medical_record_detail(request: Request, id) -> Response:
         ),
         id=id,
         consultation__patient=request.user.patient_profile,
+        status=RecordStatus.FINALIZED,
     )
     return Response(PatientMedicalRecordSerializer(record).data)
 

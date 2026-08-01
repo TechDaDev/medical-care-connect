@@ -12,6 +12,7 @@ from apps.accounts.models import User, UserRole
 from apps.consultations.models import Consultation, ConsultationStatus, DoctorConsultationAction
 from apps.core.models import AuditEvent
 from apps.doctors.models import DoctorProfile
+from apps.medical_records.models import MedicalRecordDraft, RecordStatus
 from apps.notifications.models import Notification
 from apps.patients.models import PatientProfile
 from apps.specialties.models import Specialty
@@ -123,6 +124,10 @@ class DoctorPhaseBPostgresConcurrencyTests(TransactionTestCase):
 
     def test_conflicting_doctor_transitions_serialize(self):
         consultation = self.consultation(ConsultationStatus.DOCTOR_REVIEW)
+        record = MedicalRecordDraft.objects.create(
+            consultation=consultation,
+            status=RecordStatus.FINALIZED,
+        )
         barrier = Barrier(2)
         path = f"/api/consultations/{consultation.id}/doctor-transition/"
         payloads = [
@@ -131,6 +136,13 @@ class DoctorPhaseBPostgresConcurrencyTests(TransactionTestCase):
                 "reason": "Synthetic concurrency transition reason.",
                 "expected_status": ConsultationStatus.DOCTOR_REVIEW,
                 "client_request_id": str(uuid4()),
+                "outcome": (
+                    "follow_up_required"
+                    if action == "require_follow_up"
+                    else "physical_visit_required"
+                ),
+                "medical_record_id": str(record.id),
+                "confirmation": True,
             }
             for action in ("require_follow_up", "require_physical_visit")
         ]

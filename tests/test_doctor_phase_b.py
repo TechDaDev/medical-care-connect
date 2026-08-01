@@ -148,7 +148,10 @@ class DoctorPhaseBTests(APITestCase):
         self.assertNotIn("storage_key", str(response.data))
         self.assertEqual(response.data["timeline"][0]["key"], "submitted")
         self.assertTrue(response.data["actions"]["can_accept"])
-        self.assertIsNone(response.data["medical_record"]["action_path"])
+        self.assertIn(
+            f"/app/doctor/consultations/{self.consultation.id}/medical-record",
+            response.data["medical_record"]["action_path"],
+        )
 
     def test_unrelated_doctor_cannot_open_detail(self):
         self.client.force_authenticate(self.other_doctor_user)
@@ -233,8 +236,19 @@ class DoctorPhaseBTests(APITestCase):
         url = f"/api/consultations/{self.consultation.id}/doctor-transition/"
         denied = self.client.post(url, payload, format="json")
         self.assertEqual(denied.data["code"], "medical_record_required")
-        MedicalRecordDraft.objects.create(consultation=self.consultation)
+        record = MedicalRecordDraft.objects.create(
+            consultation=self.consultation,
+            status="finalized",
+            clinical_summary="Synthetic finalized summary.",
+            patient_instructions="Synthetic finalized instructions.",
+            recommendations="Synthetic finalized recommendation.",
+        )
         payload["client_request_id"] = str(uuid4())
+        payload.update({
+            "outcome": "remote_care_completed",
+            "medical_record_id": str(record.id),
+            "confirmation": True,
+        })
         allowed = self.client.post(url, payload, format="json")
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
         self.assertEqual(allowed.data["status"], ConsultationStatus.COMPLETED)

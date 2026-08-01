@@ -2,28 +2,9 @@
 
 import logging
 
-from django.utils import timezone
-
 from apps.medical_records.models import MedicalRecordDraft
 
 logger = logging.getLogger(__name__)
-
-# Map intake collected_data keys → MedicalRecordDraft fields
-_FIELD_MAP = {
-    "chief_complaint": "chief_complaint",
-    "symptoms": "symptoms",
-    "severity": "severity",
-    "duration": "duration",
-    "location": "location",
-    "triggers": "triggers",
-    "relieving_factors": "relieving_factors",
-    "past_medical_history": "past_medical_history",
-    "medications": "medications",
-    "allergies": "allergies",
-    "family_history": "family_history",
-    "social_history": "social_history",
-    "additional_notes": "additional_notes",
-}
 
 # Map from CollectedData schema fields (snake_case in schemas.py)
 _COLLECTED_MAP = {
@@ -43,13 +24,14 @@ _COLLECTED_MAP = {
 
 
 def generate_draft_from_intake(intake_session) -> MedicalRecordDraft:
-    """Create or update a MedicalRecordDraft from a completed intake session."""
+    """Create intake-derived draft once; never overwrite later clinical work."""
     consultation = intake_session.consultation
     collected = intake_session.collected_data or {}
 
     defaults = {
         "intake_session": intake_session,
         "status": "draft",
+        "provenance": {},
     }
 
     # Map collected data fields
@@ -78,19 +60,9 @@ def generate_draft_from_intake(intake_session) -> MedicalRecordDraft:
                 )
         else:
             defaults[dst_key] = value
+        defaults["provenance"][dst_key] = "intake_extracted"
 
-    # Build HPI from complaint + duration
-    hpi_parts = []
-    cc = defaults.get("chief_complaint", "")
-    if cc:
-        hpi_parts.append(f"Patient presents with {cc.lower().rstrip('.')}.")
-    duration = defaults.get("duration", "")
-    if duration:
-        hpi_parts.append(f"Duration: {duration}.")
-    if hpi_parts:
-        defaults["history_of_present_illness"] = " ".join(hpi_parts)
-
-    record, created = MedicalRecordDraft.objects.update_or_create(
+    record, created = MedicalRecordDraft.objects.get_or_create(
         consultation=consultation,
         defaults=defaults,
     )
@@ -100,10 +72,4 @@ def generate_draft_from_intake(intake_session) -> MedicalRecordDraft:
             "Created draft record %s for consultation %s",
             record.id, consultation.id,
         )
-    else:
-        logger.info(
-            "Updated draft record %s for consultation %s",
-            record.id, consultation.id,
-        )
-
     return record

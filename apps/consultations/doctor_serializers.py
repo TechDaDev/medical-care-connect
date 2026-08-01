@@ -10,6 +10,8 @@ from apps.attachments.choices import AttachmentStatus, ScanStatus
 from apps.consultations.doctor_actions import doctor_action_policy
 from apps.consultations.models import Consultation, ConsultationStatus
 from apps.consultations.timeline import build_doctor_timeline
+from apps.medical_records.models import ClinicalOutcome
+from apps.medical_records.doctor_services import CREATE_ALLOWED_STATUSES
 
 
 def _localized_specialty(specialty, request) -> dict | None:
@@ -224,7 +226,12 @@ class DoctorConsultationDetailSerializer(serializers.ModelSerializer):
             "id": record.id if record else None,
             "status": record.status if record else None,
             "can_view_summary": self._policy(obj).actions["can_view_record_summary"],
-            "action_path": None,
+            "can_create_record": record is None and obj.status in CREATE_ALLOWED_STATUSES,
+            "action_path": (
+                f"/app/doctor/medical-records/{record.id}"
+                if record
+                else f"/app/doctor/consultations/{obj.id}/medical-record"
+            ),
         }
 
     def get_generated_at(self, obj):
@@ -306,9 +313,13 @@ class DoctorTransitionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=[
         "begin_review", "request_patient_response", "mark_awaiting_doctor",
         "require_follow_up", "require_physical_visit", "transfer", "complete",
+        "emergency_escalate",
     ])
     reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
     target_doctor_id = serializers.UUIDField(required=False, allow_null=True)
     expected_status = serializers.ChoiceField(choices=ConsultationStatus.choices)
     expected_updated_at = serializers.DateTimeField(required=False, allow_null=True)
     client_request_id = serializers.UUIDField()
+    outcome = serializers.ChoiceField(choices=ClinicalOutcome.choices, required=False)
+    medical_record_id = serializers.UUIDField(required=False)
+    confirmation = serializers.BooleanField(required=False)

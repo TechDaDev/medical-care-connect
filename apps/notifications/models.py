@@ -12,6 +12,7 @@ class NotificationType(models.TextChoices):
     CONSULTATION_CANCELLED = "consultation_cancelled", _("Consultation Cancelled")
     INTAKE_COMPLETED = "intake_completed", _("Intake Completed")
     RECORD_CONFIRMED = "record_confirmed", _("Record Confirmed")
+    RECORD_FINALIZED = "record_finalized", _("Record Finalized")
     RECORD_REVISION_REQUESTED = "record_revision_requested", _("Record Revision Requested")
     STATUS_CHANGE = "status_change", _("Status Change")
     # Phase 11 — Reviews

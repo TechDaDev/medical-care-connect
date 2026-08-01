@@ -17,6 +17,7 @@ from apps.core.audit_service import create_audit_event
 from apps.core.models import AuditEventCategory
 from apps.doctors.models import DoctorProfile
 from apps.messaging.services import consultation_allows_messaging
+from apps.medical_records.models import ClinicalOutcome, MedicalRecordDraft, RecordStatus
 from apps.notifications.models import NotificationType
 from apps.notifications.services import create_notification
 
@@ -89,6 +90,12 @@ TRANSITIONS = {
         ConsultationStatus.FOLLOW_UP_REQUIRED: ConsultationStatus.COMPLETED,
         ConsultationStatus.PHYSICAL_VISIT_REQUIRED: ConsultationStatus.COMPLETED,
     },
+    "emergency_escalate": {
+        ConsultationStatus.DOCTOR_REVIEW: ConsultationStatus.EMERGENCY_ESCALATED,
+        ConsultationStatus.UNDER_REVIEW: ConsultationStatus.EMERGENCY_ESCALATED,
+        ConsultationStatus.FOLLOW_UP_REQUIRED: ConsultationStatus.EMERGENCY_ESCALATED,
+        ConsultationStatus.PHYSICAL_VISIT_REQUIRED: ConsultationStatus.EMERGENCY_ESCALATED,
+    },
 }
 
 REASON_REQUIRED = {
@@ -97,6 +104,15 @@ REASON_REQUIRED = {
     "require_physical_visit",
     "transfer",
     "complete",
+    "emergency_escalate",
+}
+
+ACTION_OUTCOMES = {
+    "complete": ClinicalOutcome.REMOTE_CARE_COMPLETED,
+    "require_follow_up": ClinicalOutcome.FOLLOW_UP_REQUIRED,
+    "require_physical_visit": ClinicalOutcome.PHYSICAL_VISIT_REQUIRED,
+    "transfer": ClinicalOutcome.TRANSFERRED,
+    "emergency_escalate": ClinicalOutcome.EMERGENCY_ESCALATED,
 }
 
 
@@ -139,6 +155,9 @@ def doctor_action_policy(consultation: Consultation, doctor=None) -> DoctorActio
         and consultation.intake_session.status in {"ready_for_review", "confirmed"}
     )
     record_exists = _has_related(consultation, "medical_record")
+    record_finalized = bool(
+        record_exists and consultation.medical_record.status == RecordStatus.FINALIZED
+    )
 
     base_allowed = assigned and approved and not terminal
     actions = {
@@ -154,17 +173,20 @@ def doctor_action_policy(consultation: Consultation, doctor=None) -> DoctorActio
             ConsultationStatus.INTAKE_COMPLETED,
             ConsultationStatus.AWAITING_DOCTOR_RESPONSE,
         },
-        "can_require_follow_up": base_allowed and consultation.status in {
+        "can_require_follow_up": base_allowed and record_finalized and consultation.status in {
             ConsultationStatus.DOCTOR_REVIEW, ConsultationStatus.UNDER_REVIEW,
         },
-        "can_require_physical_visit": base_allowed and consultation.status in {
+        "can_require_physical_visit": base_allowed and record_finalized and consultation.status in {
             ConsultationStatus.DOCTOR_REVIEW, ConsultationStatus.UNDER_REVIEW,
         },
-        "can_transfer": base_allowed
+        "can_transfer": base_allowed and record_finalized
         and consultation.status != ConsultationStatus.EMERGENCY_ESCALATED,
+        "can_emergency_escalate": base_allowed
+        and record_finalized
+        and consultation.status in TRANSITIONS["emergency_escalate"],
         "can_complete": base_allowed
         and consultation.status in TRANSITIONS["complete"]
-        and record_exists
+        and record_finalized
         and consultation.status != ConsultationStatus.AWAITING_PATIENT_RESPONSE,
         "can_add_internal_note": assigned and approved,
         "can_upload_attachment": base_allowed
@@ -183,8 +205,10 @@ def doctor_action_policy(consultation: Consultation, doctor=None) -> DoctorActio
             return "consultation_not_submitted"
         if action in {"review_intake", "begin_review"} and not intake_complete:
             return "intake_not_complete"
-        if action == "complete" and not record_exists:
+        if action in {"complete", "follow_up", "physical_visit", "transfer", "emergency_escalate"} and not record_exists:
             return "medical_record_required"
+        if action in {"complete", "follow_up", "physical_visit", "transfer", "emergency_escalate"} and not record_finalized:
+            return "medical_record_not_finalized"
         if consultation.status == ConsultationStatus.AWAITING_PATIENT_RESPONSE:
             return "awaiting_patient"
         if consultation.status == ConsultationStatus.EMERGENCY_ESCALATED:
@@ -201,6 +225,7 @@ def doctor_action_policy(consultation: Consultation, doctor=None) -> DoctorActio
         "follow_up": "can_require_follow_up",
         "physical_visit": "can_require_physical_visit",
         "transfer": "can_transfer",
+        "emergency_escalate": "can_emergency_escalate",
         "complete": "can_complete",
         "internal_note": "can_add_internal_note",
         "attachment": "can_upload_attachment",
@@ -262,6 +287,7 @@ def _notify_transition(consultation, action: str, target_doctor=None) -> None:
         "require_physical_visit": "Physical visit required",
         "transfer": "Consultation transferred",
         "complete": "Consultation completed",
+        "emergency_escalate": "Emergency guidance available",
     }
     if action in patient_actions:
         create_notification(
@@ -296,6 +322,9 @@ def perform_doctor_action(
     expected_updated_at,
     reason: str = "",
     target_doctor_id=None,
+    outcome: str | None = None,
+    medical_record_id=None,
+    confirmation: bool | None = None,
     request_id: str = "",
 ) -> tuple[Consultation, bool]:
     """Apply one allowlisted doctor action under row lock."""
@@ -364,8 +393,23 @@ def perform_doctor_action(
             if consultation.specialty_id and target_doctor.specialty_id != consultation.specialty_id:
                 raise DoctorWorkflowError("target_doctor_specialty_mismatch", http_status=400)
 
-        if action == "complete" and not _has_related(consultation, "medical_record"):
-            raise DoctorWorkflowError("medical_record_required")
+        record = None
+        if action in ACTION_OUTCOMES:
+            if not medical_record_id:
+                raise DoctorWorkflowError("medical_record_required")
+            record = MedicalRecordDraft.objects.select_for_update().filter(
+                pk=medical_record_id,
+                consultation=consultation,
+            ).first()
+            if record is None:
+                raise DoctorWorkflowError("medical_record_not_found", http_status=404)
+            if record.status != RecordStatus.FINALIZED:
+                raise DoctorWorkflowError("medical_record_not_finalized")
+            if confirmation is not True:
+                raise DoctorWorkflowError("confirmation_required", http_status=400)
+            expected_outcome = ACTION_OUTCOMES[action]
+            if outcome != expected_outcome:
+                raise DoctorWorkflowError("outcome_action_mismatch", http_status=400)
 
         now = timezone.now()
         consultation.status = new_status
@@ -389,6 +433,10 @@ def perform_doctor_action(
                 reason=normalized_reason,
             )
         consultation.save(update_fields=update_fields)
+        if record is not None:
+            record.clinical_outcome = outcome
+            record.outcome_recorded_at = now
+            record.save(update_fields=["clinical_outcome", "outcome_recorded_at", "updated_at"])
 
         DoctorConsultationAction.objects.create(
             consultation=consultation,
@@ -415,6 +463,8 @@ def perform_doctor_action(
                 "new_status": new_status,
                 "reason_present": bool(normalized_reason),
                 "target_doctor_id": str(target_doctor.id) if target_doctor else None,
+                "outcome": outcome,
+                "medical_record_id": str(record.id) if record else None,
             },
         )
         return consultation, True

@@ -273,15 +273,52 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         body="Synthetic local acceptance review.",
         status=ReviewStatus.PUBLISHED,
     )
+    for draft_status in (
+        ConsultationStatus.DOCTOR_REVIEW,
+        ConsultationStatus.UNDER_REVIEW,
+    ):
+        MedicalRecordDraft.objects.create(
+            consultation=consultations[lifecycle_states.index(draft_status)],
+            created_by=doctors["approved"].user,
+            chief_complaint=f"{prefix} synthetic patient-reported concern",
+            symptoms=["synthetic symptom"],
+            clinical_summary="Synthetic draft clinical summary.",
+            assessment="Synthetic draft assessment.",
+            recommendations="Synthetic draft recommendation.",
+            patient_instructions="Synthetic draft patient instructions.",
+            provenance={
+                "chief_complaint": "patient_reported",
+                "symptoms": "intake_extracted",
+                "clinical_summary": "doctor_authored",
+                "assessment": "doctor_authored",
+                "recommendations": "doctor_authored",
+                "patient_instructions": "doctor_authored",
+            },
+        )
     MedicalRecordDraft.objects.create(
         consultation=completed_consultation,
         status=RecordStatus.FINALIZED,
+        created_by=doctors["approved"].user,
+        finalized_by=doctors["approved"].user,
         chief_complaint=f"{prefix} synthetic patient-visible record",
         history_of_present_illness="Synthetic local acceptance history.",
         symptoms=["synthetic symptom"],
         severity=2,
         finalized_at=timezone.now(),
         doctor_notes="Internal synthetic note; never patient-visible.",
+        clinical_summary="Synthetic finalized clinical summary.",
+        assessment="Synthetic finalized assessment.",
+        recommendations="Synthetic finalized recommendation.",
+        patient_instructions="Synthetic finalized patient instructions.",
+        clinical_outcome="remote_care_completed",
+        outcome_recorded_at=timezone.now(),
+        provenance={
+            "chief_complaint": "patient_reported",
+            "clinical_summary": "doctor_authored",
+            "assessment": "doctor_authored",
+            "recommendations": "doctor_authored",
+            "patient_instructions": "doctor_authored",
+        },
     )
     AccountDeletionRequest.objects.create(
         subject_user=patient_user,
