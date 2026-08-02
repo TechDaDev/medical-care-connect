@@ -24,7 +24,10 @@ from apps.privacy.models import AccountDeletionRequest, DataExportRequest
 class SyntheticFixtureTests(TestCase):
     def setUp(self):
         self.storage_root = tempfile.mkdtemp()
-        self.settings_override = override_settings(ATTACHMENT_LOCAL_ROOT=self.storage_root)
+        self.settings_override = override_settings(
+            ATTACHMENT_LOCAL_ROOT=self.storage_root,
+            E2E_LOCAL_ALLOWED=True,
+        )
         self.settings_override.enable()
 
     def tearDown(self):
@@ -34,28 +37,28 @@ class SyntheticFixtureTests(TestCase):
     def test_seed_and_cleanup_are_run_scoped(self):
         call_command("seed_e2e_data", run_id="phase-f-test")
         self.assertEqual(
-            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 13
+            User.objects.filter(email__startswith="e2e+phase-f-test+").count(), 16
         )
         self.assertEqual(
             Consultation.objects.filter(
                 description__startswith="e2e-phase-f-test"
             ).count(),
-            15,
+            18,
         )
         self.assertEqual(
             ConsultationAttachment.objects.filter(
                 storage_key__startswith="e2e-phase-f-test/"
             ).count(),
-            5,
+            6,
         )
         self.assertEqual(
             AccountDeletionRequest.objects.filter(
                 reason__startswith="e2e-phase-f-test"
             ).count(),
-            3,
+            4,
         )
         self.assertEqual(AIIntakeSession.objects.count(), 3)
-        self.assertEqual(DataExportRequest.objects.count(), 5)
+        self.assertEqual(DataExportRequest.objects.count(), 8)
         self.assertEqual(DoctorAvailability.objects.count(), 2)
         self.assertTrue(
             AuditEvent.objects.filter(request_id="e2e-phase-f-test").exists()
@@ -77,6 +80,15 @@ class SyntheticFixtureTests(TestCase):
     @patch.dict(os.environ, {"E2E_TEST_PASSWORD": "synthetic-test-only"}, clear=False)
     def test_seed_refuses_non_debug_environment(self):
         with self.assertRaises(CommandError):
+            call_command("seed_e2e_data", run_id="phase-f-test")
+
+    @override_settings(E2E_LOCAL_ALLOWED=False)
+    @patch.dict(os.environ, {"E2E_TEST_PASSWORD": "synthetic-test-only"}, clear=False)
+    def test_seed_refuses_without_explicit_local_e2e_flag(self):
+        with self.assertRaisesMessage(
+            CommandError,
+            "Refusing synthetic fixture operation without E2E_LOCAL_ALLOWED=true.",
+        ):
             call_command("seed_e2e_data", run_id="phase-f-test")
 
     def test_legacy_cleanup_dry_run_does_not_print_identity(self):

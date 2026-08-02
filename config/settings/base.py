@@ -16,6 +16,7 @@ environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-me-in-production")
 
 DEBUG = env("DEBUG")
+E2E_LOCAL_ALLOWED = env.bool("E2E_LOCAL_ALLOWED", default=False)
 
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 
