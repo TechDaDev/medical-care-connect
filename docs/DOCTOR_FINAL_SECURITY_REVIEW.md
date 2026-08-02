@@ -39,4 +39,4 @@ Goal: obtain or mutate clinical data without authorization.
 
 Dependency state: Python runtime requirements have no reported advisory. Local Python tool environment reports six findings against `pip 24.0`. Frontend audit reports two high findings from one React Router advisory; no RSC, server action, or `react-server-dom-*` architecture exists, so vulnerable execution path is absent. Advisory remains visible and tracked.
 
-Residual release risk: Railway deployment identity and production runtime remain unverified, not waived.
+Residual release risk: frontend production runtime remains unverified because its public hostname is unavailable. Railway deployment identity and backend production runtime are verified.

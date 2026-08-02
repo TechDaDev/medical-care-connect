@@ -15,6 +15,7 @@ Phase E closes Doctor Phases A-D without adding product scope. Evidence is valid
 | Localization and accessibility | locale unit tests | Phase A-E Axe/locale coverage | Passed in Doctor scope |
 | PostgreSQL concurrency | Phase A-D PostgreSQL suites | Not applicable | 64/64 passed |
 | Docker | clean image builds and local HTTP smoke | root, deep route, asset, API proxy | Passed |
-| Railway and production | read-only observation only | production HTTP smoke | Blocked by Railway authorization |
+| Railway automatic deployment | GitHub deployment API, read-only | exact commit/deployment/status | Passed |
+| Production smoke | deployed commit required | backend and frontend HTTP smoke | Backend passed; frontend hostname unavailable |
 
-Local closure gates passed. Final status remains `PARTIAL`: Railway automatic deployments and production read-only smoke could not be verified.
+Local closure gates and Railway automatic deployments passed. Final status remains `PARTIAL`: frontend production read-only smoke could not be verified because no public frontend hostname was available from repository or deployment evidence.

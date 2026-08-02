@@ -18,4 +18,4 @@ Doctor list endpoints use pagination, selected/prefetched relations, and measure
 
 Frontend production build uses route-level lazy loading. Final evidence records bundle output, source-map exposure check, asset caching, Docker response behavior, and route smoke results.
 
-Frontend production build transformed 2,094 modules. Largest emitted chunks: i18n 306.10 kB (67.00 kB gzip), main 221.81 kB (67.92 kB gzip), schemas 67.26 kB (18.16 kB gzip), CSS 53.93 kB (10.61 kB gzip). No source maps emitted. Local production build and Docker smoke passed; production performance remains unverified because Railway access is unavailable.
+Frontend production build transformed 2,094 modules. Largest emitted chunks: i18n 306.10 kB (67.00 kB gzip), main 221.81 kB (67.92 kB gzip), schemas 67.26 kB (18.16 kB gzip), CSS 53.93 kB (10.61 kB gzip). No source maps emitted. Local production build and Docker smoke passed. Backend production health/readiness completed in 1.104/1.234 seconds. Frontend production performance remains unverified because its public hostname is unavailable.

@@ -18,7 +18,7 @@ Seed and cleanup refuse non-local execution, non-synthetic run IDs, non-debug mo
 
 Use `COMPLETE` only when tests, migrations, Docker, pushed commits, observed Railway deployment, production smoke, and cleanup all pass. Otherwise use `PARTIAL` and name each missing gate.
 
-Current closure: local code, tests, PostgreSQL, browser, migrations, dependency review, Docker, and synthetic cleanup passed. Railway deployment identity and production smoke remain unverified; release decision is `PARTIAL`.
+Current closure: local code, tests, PostgreSQL, browser, migrations, dependency review, Docker, synthetic cleanup, Git pushes, Railway automatic deployments, and backend production smoke passed. Frontend production smoke remains unverified because no public hostname was available; release decision is `PARTIAL`.
 
 Medical-record amendment support remains intentionally absent. Finalized records are immutable through normal PATCH; UI exposes no false amendment action.
 
