@@ -58,6 +58,7 @@ jobs:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: "5432"
         run: |
+          python manage.py migrate
           python manage.py seed_development_data
           python manage.py backup_database --execute
           python manage.py verify_backup --manifest backups/*.manifest.json
