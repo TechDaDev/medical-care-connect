@@ -89,12 +89,15 @@ class MockAIResponse:
         self.usage = self.Usage()
 
 
+@override_settings(
+    AI_INTAKE_ENABLED=True,
+    DEEPSEEK_API_KEY="test-only-key",
+    DEEPSEEK_MODEL="test-only-model",
+)
 class IntakeFlowTests(TestCase):
     """End-to-end intake flow with mocked AI."""
 
     def setUp(self):
-        from django.conf import settings
-        settings.AI_INTAKE_ENABLED = True
         self.spec = Specialty.objects.create(name="General", slug="general")
         self.patient_user = User.objects.create_user(
             email="patient@test.com", password="pass123",
