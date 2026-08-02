@@ -3,7 +3,7 @@
 import json
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -144,15 +144,15 @@ class IntakeFlowTests(TestCase):
             "missing_fields": ["duration"],
         })
 
+    @override_settings(DEEPSEEK_MODEL=None)
     def test_start_intake_creates_session(self):
         url = reverse("consultations:intake-start", args=[self.consultation.id])
         resp = _jpost(self.client, url, {"language": "en"}, **self.headers)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["session_status"], "in_progress")
-        self.assertTrue(AIIntakeSession.objects.filter(
-            consultation=self.consultation
-        ).exists())
+        session = AIIntakeSession.objects.get(consultation=self.consultation)
+        self.assertEqual(session.ai_model, "")
 
     def test_start_intake_requires_patient_ownership(self):
         other_user = User.objects.create_user(
