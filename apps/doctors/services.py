@@ -154,6 +154,11 @@ def _consultation_action_path(consultation_id) -> str:
 
 
 def _notification_action_path(notification: Notification) -> str:
+    if (
+        notification.notification_type == NotificationType.NEW_MESSAGE
+        and notification.consultation_id
+    ):
+        return f"/app/doctor/messages/{notification.consultation_id}"
     if notification.consultation_id:
         return _consultation_action_path(notification.consultation_id)
     if notification.notification_type in {
@@ -167,7 +172,7 @@ def _notification_action_path(notification: Notification) -> str:
         NotificationType.ACCOUNT_STATUS_CHANGE,
     }:
         return "/app/doctor/profile"
-    return "/app/notifications"
+    return "/app/doctor/notifications"
 
 
 def build_doctor_dashboard(profile: DoctorProfile, user) -> dict:
@@ -327,7 +332,7 @@ def build_doctor_dashboard(profile: DoctorProfile, user) -> dict:
         "unread_messages",
         unread_total,
         "warning",
-        "/app/doctor/consultations",
+        "/app/doctor/messages",
     )
     unanswered_review = next(
         (review for review in recent_reviews if not review.has_response), None
@@ -336,7 +341,7 @@ def build_doctor_dashboard(profile: DoctorProfile, user) -> dict:
         "review_response",
         review_summary["unanswered"],
         "info",
-        "/app/doctor/reviews",
+        "/app/doctor/reviews?responded=false",
         review_id=unanswered_review.id if unanswered_review else None,
     )
 
@@ -433,7 +438,7 @@ def build_doctor_dashboard(profile: DoctorProfile, user) -> dict:
                     "consultation_status": row["consultation__status"],
                     "unread_count": row["unread_count"],
                     "last_message_at": row["last_message_at"],
-                    "action_path": _consultation_action_path(row["consultation_id"]),
+                    "action_path": f"/app/doctor/messages/{row['consultation_id']}",
                 }
                 for row in unread_rows[:5]
             ],

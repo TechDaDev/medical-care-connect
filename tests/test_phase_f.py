@@ -55,7 +55,7 @@ class SyntheticFixtureTests(TestCase):
             3,
         )
         self.assertEqual(AIIntakeSession.objects.count(), 3)
-        self.assertEqual(DataExportRequest.objects.count(), 3)
+        self.assertEqual(DataExportRequest.objects.count(), 5)
         self.assertEqual(DoctorAvailability.objects.count(), 2)
         self.assertTrue(
             AuditEvent.objects.filter(request_id="e2e-phase-f-test").exists()
@@ -71,6 +71,7 @@ class SyntheticFixtureTests(TestCase):
             ).exists()
         )
         self.assertFalse(DoctorAvailability.objects.exists())
+        self.assertFalse(DataExportRequest.objects.exists())
 
     @override_settings(DEBUG=False)
     @patch.dict(os.environ, {"E2E_TEST_PASSWORD": "synthetic-test-only"}, clear=False)

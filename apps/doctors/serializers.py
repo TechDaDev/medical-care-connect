@@ -24,6 +24,9 @@ class DoctorOwnProfileReadSerializer(serializers.ModelSerializer):
     )
     has_license_document = serializers.SerializerMethodField()
     license_document_verified = serializers.SerializerMethodField()
+    completeness = serializers.SerializerMethodField()
+    public_preview = serializers.SerializerMethodField()
+    links = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorProfile
@@ -49,6 +52,9 @@ class DoctorOwnProfileReadSerializer(serializers.ModelSerializer):
             "estimated_response_minutes",
             "has_license_document",
             "license_document_verified",
+            "completeness",
+            "public_preview",
+            "links",
             "created_at",
             "updated_at",
         ]
@@ -61,6 +67,24 @@ class DoctorOwnProfileReadSerializer(serializers.ModelSerializer):
         if hasattr(obj, "license_document") and obj.license_document is not None:
             return obj.license_document.is_verified
         return False
+
+    def get_completeness(self, obj):
+        from apps.doctors.services import doctor_profile_completeness
+
+        return doctor_profile_completeness(obj)
+
+    def get_public_preview(self, obj):
+        eligible = bool(obj.is_approved and obj.user.is_active)
+        return {
+            "eligible": eligible,
+            "path": f"/doctors/{obj.id}" if eligible else None,
+        }
+
+    def get_links(self, obj):
+        return {
+            "availability": "/app/doctor/availability",
+            "privacy": "/app/doctor/privacy",
+        }
 
 
 ALLOWED_LANGUAGES = {"ar", "en", "ckb"}

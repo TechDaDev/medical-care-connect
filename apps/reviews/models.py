@@ -109,6 +109,42 @@ class DoctorReviewResponse(BaseModel):
         return f"Response to review {self.review_id} by Dr. {self.doctor_id}"
 
 
+class ReviewResponseAction(BaseModel):
+    """Idempotency ledger for doctor review-response mutations."""
+
+    class Action(models.TextChoices):
+        CREATE = "create", _("Create")
+        UPDATE = "update", _("Update")
+
+    review = models.ForeignKey(
+        ConsultationReview,
+        on_delete=models.CASCADE,
+        related_name="response_actions",
+    )
+    doctor = models.ForeignKey(
+        "doctors.DoctorProfile",
+        on_delete=models.CASCADE,
+        related_name="review_response_actions",
+    )
+    action = models.CharField(max_length=10, choices=Action.choices)
+    client_request_id = models.UUIDField()
+    request_fingerprint = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["doctor", "client_request_id"],
+                name="review_response_action_unique_doctor_request",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["review", "action"],
+                name="reviews_rev_review__7355cf_idx",
+            )
+        ]
+
+
 class ReviewReport(BaseModel):
     """A user-submitted report about a review."""
 

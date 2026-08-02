@@ -38,7 +38,7 @@ def notify_review_response(review, response):
         recipient=patient_user,
         notification_type=NotificationType.REVIEW_RESPONSE,
         title="Doctor Responded to Your Review",
-        body=response.body[:200],
+        body="Your doctor posted a public response to your review.",
         consultation=review.consultation,
     )
 

@@ -271,6 +271,7 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         rating=5,
         title=f"{prefix} synthetic published review",
         body="Synthetic local acceptance review.",
+        is_anonymous=True,
         status=ReviewStatus.PUBLISHED,
     )
     for draft_status in (
@@ -374,6 +375,13 @@ def seed(run_id: str, password: str) -> dict[str, int]:
         body="Synthetic local doctor notification.",
         consultation=submitted_consultation,
     )
+    Notification.objects.create(
+        recipient=doctors["approved"].user,
+        notification_type=NotificationType.NEW_MESSAGE,
+        title=f"{prefix} doctor message notification",
+        body="Synthetic in-app message notification.",
+        consultation=submitted_consultation,
+    )
     AuditEvent.objects.create(
         event_type="e2e_fixture_seeded",
         category=AuditEventCategory.SYSTEM,
@@ -455,12 +463,29 @@ def seed(run_id: str, password: str) -> dict[str, int]:
             size_bytes=len(archive) if has_archive else None,
         )
 
+    for name, export_status in (("doctor-completed", ExportStatus.COMPLETED), ("doctor-expired", ExportStatus.EXPIRED)):
+        storage_key = f"{prefix}/exports/{name}.zip"
+        archive = f"{prefix} synthetic doctor export archive {name}\n".encode()
+        storage.save(BytesIO(archive), storage_key)
+        DataExportRequest.objects.create(
+            requested_by=doctors["approved"].user,
+            subject_user=doctors["approved"].user,
+            status=export_status,
+            started_at=timezone.now(),
+            completed_at=timezone.now(),
+            expires_at=timezone.now() - timedelta(days=1) if export_status == ExportStatus.EXPIRED else timezone.now() + timedelta(days=7),
+            storage_provider="local",
+            storage_key=storage_key,
+            checksum=hashlib.sha256(archive).hexdigest(),
+            size_bytes=len(archive),
+        )
+
     return {
         "users": User.objects.filter(email__startswith=f"e2e+{run_id}+").count(),
         "consultations": len(consultations),
         "attachments": len(attachment_specs),
         "privacy_requests": 3,
-        "privacy_exports": len(export_specs),
+        "privacy_exports": len(export_specs) + 2,
         "intake_sessions": 3,
     }
 
