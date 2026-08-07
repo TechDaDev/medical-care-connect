@@ -76,7 +76,8 @@ TERMINAL_STATUSES = (
 INCOMPLETE_INTAKE_STATUSES = (
     IntakeSessionStatus.NOT_STARTED,
     IntakeSessionStatus.IN_PROGRESS,
-    IntakeSessionStatus.AWAITING_PATIENT,
+    IntakeSessionStatus.AWAITING_PATIENT_REVIEW,
+    IntakeSessionStatus.CORRECTION_IN_PROGRESS,
     IntakeSessionStatus.FAILED,
 )
 

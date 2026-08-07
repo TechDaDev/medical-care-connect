@@ -152,7 +152,8 @@ def doctor_action_policy(consultation: Consultation, doctor=None) -> DoctorActio
     terminal = consultation.status in TERMINAL_STATUSES
     intake_complete = bool(
         _has_related(consultation, "intake_session")
-        and consultation.intake_session.status in {"ready_for_review", "confirmed"}
+        and consultation.intake_session.status
+        in {"awaiting_patient_review", "correction_in_progress", "confirmed", "submitted_to_doctor"}
     )
     record_exists = _has_related(consultation, "medical_record")
     record_finalized = bool(

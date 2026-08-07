@@ -99,7 +99,12 @@ class DoctorConsultationQueueSerializer(serializers.ModelSerializer):
 
     def get_has_completed_intake(self, obj):
         try:
-            return obj.intake_session.status in {"ready_for_review", "confirmed"}
+            return obj.intake_session.status in {
+                "awaiting_patient_review",
+                "correction_in_progress",
+                "confirmed",
+                "submitted_to_doctor",
+            }
         except (AttributeError, AIIntakeSession.DoesNotExist):
             return False
 
@@ -184,7 +189,9 @@ class DoctorConsultationDetailSerializer(serializers.ModelSerializer):
             "status": session.status,
             "question_count": session.question_count,
             "answered_count": answered,
-            "is_complete": session.status in {"ready_for_review", "confirmed"},
+            "is_complete": session.status in {
+                "awaiting_patient_review", "confirmed", "submitted_to_doctor"
+            },
             "emergency_detected": session.emergency_detected,
             "completed_at": session.completed_at,
             "doctor_safe_summary": _doctor_safe_summary(session.collected_data),
@@ -257,19 +264,36 @@ def _doctor_safe_summary(data) -> dict | None:
 
 
 class DoctorIntakeSerializer(serializers.ModelSerializer):
+    """Doctor-safe intake projection.
+
+    Shows patient-confirmed structured data, original answers, provenance,
+    uncertainty, missing/non-blocking information, emergency state, version
+    metadata, and an explicit AI-assisted disclaimer.  Never exposes hidden
+    prompts, provider credentials, raw provider responses, or chain-of-thought.
+    """
+
     session_id = serializers.UUIDField(source="id", read_only=True)
     consultation_id = serializers.UUIDField(read_only=True)
     answered_count = serializers.SerializerMethodField()
     patient_answers = serializers.SerializerMethodField()
     doctor_safe_summary = serializers.SerializerMethodField()
+    field_projection = serializers.SerializerMethodField()
+    patient_confirmed = serializers.SerializerMethodField()
+    ai_assisted = serializers.SerializerMethodField()
+    uncertainty_fields = serializers.SerializerMethodField()
+    missing_non_blocking = serializers.SerializerMethodField()
     can_begin_review = serializers.SerializerMethodField()
 
     class Meta:
         model = AIIntakeSession
         fields = [
             "session_id", "consultation_id", "status", "started_at", "completed_at",
-            "question_count", "answered_count", "emergency_detected",
-            "patient_answers", "doctor_safe_summary", "missing_fields",
+            "confirmed_at", "submitted_at", "question_count", "answered_count",
+            "language", "prompt_version", "schema_version",
+            "emergency_detected", "emergency_level",
+            "patient_confirmed", "ai_assisted",
+            "patient_answers", "doctor_safe_summary", "field_projection",
+            "missing_fields", "uncertainty_fields", "missing_non_blocking",
             "can_begin_review",
         ]
         read_only_fields = fields
@@ -294,6 +318,47 @@ class DoctorIntakeSerializer(serializers.ModelSerializer):
 
     def get_doctor_safe_summary(self, obj):
         return _doctor_safe_summary(obj.collected_data)
+
+    def get_patient_confirmed(self, obj):
+        return obj.status in {"confirmed", "submitted_to_doctor"}
+
+    def get_ai_assisted(self, obj):
+        # Always AI-assisted: displayed as a disclaimer, never as doctor-authored.
+        return True
+
+    def get_uncertainty_fields(self, obj):
+        metadata = obj.field_metadata or {}
+        return sorted(
+            name for name, entry in metadata.items()
+            if (entry or {}).get("status") == "uncertain"
+        )
+
+    def get_missing_non_blocking(self, obj):
+        try:
+            from apps.ai_intake.services.completeness import evaluate_completeness
+            return evaluate_completeness(obj).missing_non_blocking_fields
+        except Exception:
+            return []
+
+    def get_field_projection(self, obj):
+        """Structured per-field values with status/source/provenance."""
+        metadata = obj.field_metadata or {}
+        projection = {}
+        for name, entry in metadata.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") not in {
+                "answered", "unknown", "declined", "uncertain", "not_applicable",
+            }:
+                continue
+            projection[name] = {
+                "value": entry.get("value"),
+                "status": entry.get("status"),
+                "source": entry.get("source"),
+                "confirmed_by_patient": entry.get("confirmed_by_patient", False),
+                "evidence_message_ids": entry.get("evidence_message_ids", []),
+            }
+        return projection
 
     def get_can_begin_review(self, obj):
         policy = doctor_action_policy(obj.consultation, self.context["doctor"])

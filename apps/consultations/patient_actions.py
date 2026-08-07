@@ -59,10 +59,10 @@ def patient_action_policy(consultation) -> PatientActionPolicy:
     }
     emergency = consultation.status == ConsultationStatus.EMERGENCY_ESCALATED
     intake_active = bool(
-        intake and intake.status in {"not_started", "in_progress", "awaiting_patient"}
+        intake and intake.status in {"not_started", "in_progress", "awaiting_patient_review"}
     )
     intake_complete = bool(
-        intake and intake.status in {"ready_for_review", "confirmed"}
+        intake and intake.status in {"awaiting_patient_review", "confirmed", "submitted_to_doctor"}
     )
 
     actions = {

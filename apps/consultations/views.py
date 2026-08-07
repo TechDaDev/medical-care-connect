@@ -213,7 +213,12 @@ def _filter_doctor_consultations(queryset, request):
         queryset = queryset.filter(unread_messages__gt=0)
     if params.get("has_completed_intake", "").lower() == "true":
         queryset = queryset.filter(
-            intake_session__status__in=["ready_for_review", "confirmed"]
+            intake_session__status__in=[
+                "awaiting_patient_review",
+                "correction_in_progress",
+                "confirmed",
+                "submitted_to_doctor",
+            ]
         )
     if params.get("has_medical_record", "").lower() == "true":
         queryset = queryset.filter(medical_record__isnull=False)
@@ -713,7 +718,11 @@ def start_intake(request: Request, pk) -> Response:
     allowed_resume_state = (
         existing is not None
         and existing.status in {
-            "ready_for_review", "confirmed", "emergency_stopped"
+            "awaiting_patient_review",
+            "correction_in_progress",
+            "confirmed",
+            "submitted_to_doctor",
+            "emergency_stopped",
         }
     )
     if (

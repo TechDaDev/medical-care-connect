@@ -259,9 +259,10 @@ class DoctorPhaseBTests(APITestCase):
         self.consultation.save(update_fields=["status", "updated_at"])
         session = AIIntakeSession.objects.create(
             consultation=self.consultation,
-            status=IntakeSessionStatus.READY_FOR_REVIEW,
+            status=IntakeSessionStatus.AWAITING_PATIENT_REVIEW,
             ai_provider="hidden-provider",
-            prompt_version="hidden-prompt",
+            ai_model="hidden-model",
+            prompt_version="mcc-intake-v2",
             collected_data={"chief_complaint": "Synthetic concern", "symptoms": ["synthetic"]},
             missing_fields=["synthetic_field"],
         )
@@ -279,9 +280,12 @@ class DoctorPhaseBTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         body = str(response.data)
+        # Provider credentials/model and raw system prompt content are hidden.
         self.assertNotIn("hidden-provider", body)
+        self.assertNotIn("hidden-model", body)
         self.assertNotIn("hidden system prompt", body)
-        self.assertNotIn("hidden-prompt", body)
+        # The schema version identifier is exposed to the doctor (Phase A contract).
+        self.assertEqual(response.data["prompt_version"], "mcc-intake-v2")
         self.assertEqual(response.data["answered_count"], 1)
 
     def test_internal_note_is_idempotent_paginated_and_has_safe_author(self):

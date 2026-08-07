@@ -363,7 +363,7 @@ class PatientConsultationListSerializer(serializers.ModelSerializer):
         intake = getattr(obj, "intake_session", None)
         return bool(
             intake
-            and intake.status in {"not_started", "in_progress", "awaiting_patient"}
+            and intake.status in {"not_started", "in_progress", "awaiting_patient_review"}
         )
 
     def get_has_medical_record(self, obj):
@@ -450,7 +450,9 @@ class PatientConsultationDetailSerializer(serializers.ModelSerializer):
             "exists": True,
             "status": intake.status,
             "question_count": intake.question_count,
-            "is_complete": intake.status in {"ready_for_review", "confirmed"},
+            "is_complete": intake.status in {
+                "awaiting_patient_review", "confirmed", "submitted_to_doctor"
+            },
             "emergency_detected": intake.emergency_detected,
             "updated_at": intake.updated_at,
         }

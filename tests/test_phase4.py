@@ -2,6 +2,7 @@
 
 import json
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -123,28 +124,20 @@ class IntakeFlowTests(TestCase):
         self.headers = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
 
     def _mock_ai(self, status="needs_more_information", question="Any other symptoms?"):
-        """Return a mock AI response dict."""
+        """Return a mock AI response dict in the Phase A schema format."""
         msg = question or "Your information has been recorded."
         return json.dumps({
             "conversation_status": status,
             "patient_facing_message": msg,
-            "next_question": question,
-            "emergency_detected": False,
-            "emergency_level": "none",
-            "emergency_reasons": [],
-            "collected_data": {
-                "chief_complaint": "headache",
-                "symptoms": ["head pain"],
-                "severity": 5,
-                "additional_information": [],
-                "associated_symptoms": [],
-                "chronic_conditions": [],
-                "current_medications": [],
-                "allergies": [],
-                "surgical_history": [],
-                "family_history": [],
-            },
-            "missing_fields": ["duration"],
+            "next_question": (
+                {"field": "duration", "text": question}
+                if question else None
+            ),
+            "extracted_updates": [],
+            "uncertain_fields": [],
+            "suggested_relevant_fields": [],
+            "emergency_signal": {"detected": False, "level": "none", "reasons": []},
+            "summary_for_review": None,
         })
 
     @override_settings(DEEPSEEK_MODEL=None)
@@ -190,26 +183,64 @@ class IntakeFlowTests(TestCase):
         self.assertEqual(data["question_count"], 1)
 
     @patch("apps.ai_intake.services.deepseek.OpenAI")
-    def test_intake_completes_and_generates_draft(self, mock_openai):
+    def test_intake_confirm_and_submit_generates_draft(self, mock_openai):
+        """Phase A: intake completes at the backend gate, then patient confirms
+        and submits before a draft is generated."""
         # Start session
         url = reverse("consultations:intake-start", args=[self.consultation.id])
         resp = _jpost(self.client, url, {"language": "en"}, **self.headers)
         session_id = resp.json()["session_id"]
+        session = AIIntakeSession.objects.get(pk=session_id)
 
-        # Mock AI to say ready_for_review
-        mock_instance = mock_openai.return_value
-        mock_instance.chat.completions.create.return_value = MockAIResponse(
-            self._mock_ai(status="ready_for_review", question=None)
-        )
+        # Seed deterministic complete metadata (Phase A backend gate authority).
+        fields = ["chief_complaint", "symptoms", "onset", "duration", "severity",
+                  "past_medical_history", "current_medications", "allergies"]
+        metadata = {}
+        for name in fields:
+            metadata[name] = {
+                "value": "headache" if name == "chief_complaint" else (
+                    ["head pain"] if name == "symptoms" else "synthetic"),
+                "status": "answered",
+                "source": "patient_message",
+                "confidence": "high",
+                "evidence_message_ids": [],
+                "confirmed_by_patient": False,
+            }
+        session.field_metadata = metadata
+        session.status = "awaiting_patient_review"
+        session.save()
 
-        url = reverse("intake:intake-answer", args=[session_id])
-        resp = _jpost(self.client, url, {"answer": "I have a headache for 2 days"}, **self.headers)
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(data["session_status"], "ready_for_review")
-        self.assertTrue(data["record_ready"])
+        # Review is allowed by the deterministic completeness gate.
+        review_url = reverse("intake:intake-review", args=[session_id])
+        rv = self.client.get(review_url, **self.headers)
+        self.assertEqual(rv.status_code, 200)
+        self.assertTrue(rv.json()["can_confirm"])
 
-        # Check medical record was auto-generated
+        # No draft exists before confirmation/submission.
+        self.assertFalse(MedicalRecordDraft.objects.filter(
+            consultation=self.consultation
+        ).exists())
+
+        # Confirm.
+        session.refresh_from_db()
+        confirm_url = reverse("intake:intake-confirm", args=[session_id])
+        rc = _jpost(self.client, confirm_url, {
+            "expected_updated_at": session.updated_at.isoformat(),
+            "confirmation": True,
+            "client_request_id": str(uuid4()),
+        }, **self.headers)
+        self.assertEqual(rc.status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(session.status, "confirmed")
+
+        # Submit → one draft is generated.
+        submit_url = reverse("intake:intake-submit", args=[session_id])
+        rs = _jpost(self.client, submit_url, {
+            "expected_updated_at": session.updated_at.isoformat(),
+            "client_request_id": str(uuid4()),
+        }, **self.headers)
+        self.assertEqual(rs.status_code, 200)
+        self.assertEqual(rs.json()["consultation_status"], "doctor_review")
         self.assertTrue(MedicalRecordDraft.objects.filter(
             consultation=self.consultation
         ).exists())

@@ -257,7 +257,11 @@ class DoctorMedicalRecordDetailSerializer(serializers.ModelSerializer):
         intake = obj.intake_session
         return {
             "exists": intake is not None,
-            "is_complete": bool(intake and intake.status in {"ready_for_review", "confirmed"}),
+            "is_complete": bool(
+                intake
+                and intake.status
+                in {"awaiting_patient_review", "confirmed", "submitted_to_doctor"}
+            ),
             "emergency_detected": bool(intake and intake.emergency_detected),
             "summary_available": bool(intake and intake.collected_data),
             "action_path": (

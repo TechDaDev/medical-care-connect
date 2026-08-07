@@ -7,11 +7,14 @@ from apps.core.models import BaseModel
 class IntakeSessionStatus(models.TextChoices):
     NOT_STARTED = "not_started", _("Not Started")
     IN_PROGRESS = "in_progress", _("In Progress")
-    AWAITING_PATIENT = "awaiting_patient", _("Awaiting Patient")
-    READY_FOR_REVIEW = "ready_for_review", _("Ready for Review")
+    AWAITING_PATIENT_REVIEW = "awaiting_patient_review", _("Awaiting Patient Review")
+    CORRECTION_IN_PROGRESS = "correction_in_progress", _("Correction In Progress")
     CONFIRMED = "confirmed", _("Confirmed")
+    SUBMITTED_TO_DOCTOR = "submitted_to_doctor", _("Submitted To Doctor")
     EMERGENCY_STOPPED = "emergency_stopped", _("Emergency Stopped")
+    TEMPORARILY_UNAVAILABLE = "temporarily_unavailable", _("Temporarily Unavailable")
     FAILED = "failed", _("Failed")
+    CANCELLED = "cancelled", _("Cancelled")
 
 
 class EmergencyLevel(models.TextChoices):
@@ -28,7 +31,12 @@ class IntakeLanguage(models.TextChoices):
 
 
 class AIIntakeSession(BaseModel):
-    """One AI intake session per consultation."""
+    """One AI intake session per consultation.
+
+    The deterministic backend controls all state transitions, completion
+    gates, emergency stops, confirmation, and submission.  DeepSeek only
+    assists with conversational wording and structured extraction.
+    """
 
     consultation = models.OneToOneField(
         "consultations.Consultation",
@@ -38,7 +46,7 @@ class AIIntakeSession(BaseModel):
     )
     status = models.CharField(
         _("status"),
-        max_length=25,
+        max_length=30,
         choices=IntakeSessionStatus.choices,
         default=IntakeSessionStatus.NOT_STARTED,
     )
@@ -58,20 +66,52 @@ class AIIntakeSession(BaseModel):
         default=EmergencyLevel.NONE,
     )
     emergency_reasons = models.JSONField(_("emergency reasons"), default=list, blank=True)
+    emergency_escalated_at = models.DateTimeField(_("emergency escalated at"), blank=True, null=True)
+
+    # ── Structured per-field metadata ──────────────────────────────
+    # Maps allowlisted field name -> {
+    #   value, status (missing|answered|unknown|declined|not_applicable|uncertain),
+    #   source (patient_message|patient_profile|intake_extraction|patient_correction),
+    #   confidence ("low"|"medium"|"high" — internal only, never shown as medical
+    #   certainty), evidence_message_ids: [uuid], confirmed_by_patient: bool
+    # }
+    field_metadata = models.JSONField(_("field metadata"), default=dict, blank=True)
+
+    # Conditional-relevance rules the backend accepted from the AI.
+    suggested_relevant_fields = models.JSONField(
+        _("suggested relevant fields"), default=list, blank=True
+    )
+
+    # Backward-compatible summary derived from field_metadata.
     collected_data = models.JSONField(_("collected data"), default=dict, blank=True)
     missing_fields = models.JSONField(_("missing fields"), default=list, blank=True)
+
+    patient_review_summary = models.JSONField(
+        _("patient review summary"), default=dict, blank=True
+    )
+    confirmation_snapshot = models.JSONField(
+        _("confirmation snapshot"), default=dict, blank=True
+    )
+    confirmed_at = models.DateTimeField(_("confirmed at"), blank=True, null=True)
+    submitted_at = models.DateTimeField(_("submitted at"), blank=True, null=True)
+
     ai_provider = models.CharField(_("AI provider"), max_length=30, blank=True)
     ai_model = models.CharField(_("AI model"), max_length=60, blank=True)
     prompt_version = models.CharField(_("prompt version"), max_length=30, blank=True)
+    schema_version = models.CharField(_("schema version"), max_length=30, blank=True)
+
     started_at = models.DateTimeField(_("started at"), blank=True, null=True)
     completed_at = models.DateTimeField(_("completed at"), blank=True, null=True)
-    confirmed_at = models.DateTimeField(_("confirmed at"), blank=True, null=True)
     last_ai_request_at = models.DateTimeField(_("last AI request at"), blank=True, null=True)
+    provider_calls = models.PositiveIntegerField(_("provider calls"), default=0)
+
     input_tokens = models.PositiveIntegerField(_("input tokens"), default=0)
     output_tokens = models.PositiveIntegerField(_("output tokens"), default=0)
     total_tokens = models.PositiveIntegerField(_("total tokens"), default=0)
-    error_code = models.CharField(_("error code"), max_length=30, blank=True)
-    error_message = models.TextField(_("error message"), blank=True)
+    retry_count = models.PositiveIntegerField(_("retry count"), default=0)
+
+    # Safe machine error code only — never raw provider text.
+    error_code = models.CharField(_("error code"), max_length=40, blank=True)
 
     class Meta:
         verbose_name = _("AI intake session")
@@ -120,3 +160,38 @@ class AIIntakeMessage(BaseModel):
     def __str__(self) -> str:
         preview = self.content[:60]
         return f"[{self.sequence_number}] {self.role}: {preview}"
+
+
+class IntakeIdempotencyLedger(BaseModel):
+    """Idempotency + audit metadata ledger.
+
+    Stores only safe metadata — never message content, symptoms, medications,
+    summaries, prompts, or provider response bodies.
+    """
+
+    session = models.ForeignKey(
+        AIIntakeSession,
+        on_delete=models.CASCADE,
+        related_name="idempotency_ledger",
+    )
+    action = models.CharField(max_length=24)  # answer|confirm|submit|correction|emergency
+    client_request_id = models.UUIDField()
+    result_code = models.CharField(max_length=40, blank=True)
+    provider_call_count = models.PositiveIntegerField(default=0)
+    state_before = models.CharField(max_length=30, blank=True)
+    state_after = models.CharField(max_length=30, blank=True)
+    token_delta = models.PositiveIntegerField(default=0)
+    emergency_level_code = models.CharField(max_length=15, blank=True)
+    prompt_version = models.CharField(max_length=30, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "action", "client_request_id"],
+                name="intake_unique_session_action_request",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["session", "-created_at"]),
+            models.Index(fields=["session", "action", "client_request_id"]),
+        ]
