@@ -283,6 +283,19 @@ class DoctorIntakeSerializer(serializers.ModelSerializer):
     uncertainty_fields = serializers.SerializerMethodField()
     missing_non_blocking = serializers.SerializerMethodField()
     can_begin_review = serializers.SerializerMethodField()
+    patient = serializers.SerializerMethodField()
+    specialty = serializers.SerializerMethodField()
+    consultation_status = serializers.CharField(source="consultation.status", read_only=True)
+    ai_disclaimer_key = serializers.SerializerMethodField()
+    structured_fields = serializers.SerializerMethodField()
+    missing_blocking_fields = serializers.SerializerMethodField()
+    missing_non_blocking_fields = serializers.SerializerMethodField()
+    uncertain_fields = serializers.SerializerMethodField()
+    unknown_fields = serializers.SerializerMethodField()
+    declined_fields = serializers.SerializerMethodField()
+    emergency = serializers.SerializerMethodField()
+    messages = serializers.SerializerMethodField()
+    medical_record = serializers.SerializerMethodField()
 
     class Meta:
         model = AIIntakeSession
@@ -295,6 +308,10 @@ class DoctorIntakeSerializer(serializers.ModelSerializer):
             "patient_answers", "doctor_safe_summary", "field_projection",
             "missing_fields", "uncertainty_fields", "missing_non_blocking",
             "can_begin_review",
+            "patient", "specialty", "consultation_status", "ai_disclaimer_key",
+            "structured_fields", "missing_blocking_fields",
+            "missing_non_blocking_fields", "uncertain_fields", "unknown_fields",
+            "declined_fields", "emergency", "messages", "medical_record",
         ]
         read_only_fields = fields
 
@@ -344,6 +361,10 @@ class DoctorIntakeSerializer(serializers.ModelSerializer):
         """Structured per-field values with status/source/provenance."""
         metadata = obj.field_metadata or {}
         projection = {}
+        safe_message_ids = {
+            str(message.id) for message in obj.messages.all()
+            if message.role in {"patient", "assistant"}
+        }
         for name, entry in metadata.items():
             if not isinstance(entry, dict):
                 continue
@@ -356,13 +377,109 @@ class DoctorIntakeSerializer(serializers.ModelSerializer):
                 "status": entry.get("status"),
                 "source": entry.get("source"),
                 "confirmed_by_patient": entry.get("confirmed_by_patient", False),
-                "evidence_message_ids": entry.get("evidence_message_ids", []),
+                "evidence_message_ids": [
+                    str(message_id) for message_id in entry.get("evidence_message_ids", [])
+                    if str(message_id) in safe_message_ids
+                ],
             }
         return projection
 
     def get_can_begin_review(self, obj):
         policy = doctor_action_policy(obj.consultation, self.context["doctor"])
         return policy.actions["can_begin_review"]
+
+    def get_patient(self, obj):
+        patient = obj.consultation.patient
+        return {"id": patient.id, "display_name": patient.user.full_name}
+
+    def get_specialty(self, obj):
+        specialty = obj.consultation.specialty
+        if specialty is None:
+            return None
+        language = "ckb" if obj.language in {"ckb", "ku"} else obj.language
+        name = getattr(specialty, f"name_{language}", "") or specialty.name
+        return {"id": specialty.id, "name": name}
+
+    def get_ai_disclaimer_key(self, obj):
+        return "ai_intake.not_clinically_verified"
+
+    def get_structured_fields(self, obj):
+        return [
+            {"field": name, "display_value": entry["value"], **{
+                key: entry[key] for key in (
+                    "status", "source", "confirmed_by_patient", "evidence_message_ids"
+                )
+            }}
+            for name, entry in self.get_field_projection(obj).items()
+        ]
+
+    def get_missing_blocking_fields(self, obj):
+        return list(obj.missing_fields or [])
+
+    def get_missing_non_blocking_fields(self, obj):
+        return self.get_missing_non_blocking(obj)
+
+    def _fields_with_status(self, obj, status_value):
+        return sorted(
+            name for name, entry in (obj.field_metadata or {}).items()
+            if isinstance(entry, dict) and entry.get("status") == status_value
+        )
+
+    def get_uncertain_fields(self, obj):
+        return self._fields_with_status(obj, "uncertain")
+
+    def get_unknown_fields(self, obj):
+        return self._fields_with_status(obj, "unknown")
+
+    def get_declined_fields(self, obj):
+        return self._fields_with_status(obj, "declined")
+
+    def get_emergency(self, obj):
+        return {
+            "detected": obj.emergency_detected,
+            "level": obj.emergency_level,
+            "reason_codes": list(obj.emergency_reasons or []),
+            "escalated_at": obj.emergency_escalated_at,
+            "normal_intake_stopped": obj.status == "emergency_stopped",
+            "emergency_services_contacted": False,
+            "clinician_review_status": "unreviewed",
+        }
+
+    def get_messages(self, obj):
+        messages = [
+            message for message in obj.messages.all()
+            if message.role in {"patient", "assistant"}
+        ][-40:]
+        return [{
+            "id": message.id,
+            "role": message.role,
+            "content": message.content,
+            "sequence_number": message.sequence_number,
+            "created_at": message.created_at,
+        } for message in messages]
+
+    def get_medical_record(self, obj):
+        try:
+            record = obj.consultation.medical_record
+        except AttributeError:
+            record = None
+        if record is not None:
+            return {
+                "exists": True,
+                "id": str(record.id),
+                "status": record.status,
+                "action_path": f"/app/doctor/medical-records/{record.id}",
+                "unavailable_reason": None,
+            }
+        reason = (
+            "intake_not_submitted"
+            if obj.status != "submitted_to_doctor"
+            else "draft_not_available"
+        )
+        return {
+            "exists": False, "id": None, "status": None,
+            "action_path": None, "unavailable_reason": reason,
+        }
 
 
 class DoctorAcceptSerializer(serializers.Serializer):

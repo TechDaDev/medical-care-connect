@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "version": "mcc-emergency-rules-v1",
+  "cases": [
+    {"id":"en-positive","language":"en","category":"positive","text":"I have severe chest pain now","detected":true,"level":"emergency","rule_codes":["chest_pain"]},
+    {"id":"en-negated","language":"en","category":"negated","text":"I do not have severe chest pain","detected":false,"level":"none","rule_codes":[]},
+    {"id":"en-historical","language":"en","category":"historical","text":"I had severe chest pain three years ago","detected":false,"level":"none","rule_codes":[]},
+    {"id":"en-family","language":"en","category":"family","text":"My father has severe chest pain","detected":false,"level":"none","rule_codes":[]},
+    {"id":"en-hypothetical","language":"en","category":"hypothetical","text":"What does severe chest pain mean?","detected":false,"level":"none","rule_codes":[]},
+    {"id":"en-punctuation","language":"en","category":"punctuation","text":"SEVERE CHEST PAIN!!!","detected":true,"level":"emergency","rule_codes":["chest_pain"]},
+    {"id":"ar-positive","language":"ar","category":"positive","text":"لدي أَلَمٌ فِي الصَّدْر","detected":true,"level":"emergency","rule_codes":["chest_pain"]},
+    {"id":"ar-negated","language":"ar","category":"negated","text":"لا يوجد ألم في الصدر","detected":false,"level":"none","rule_codes":[]},
+    {"id":"ar-historical","language":"ar","category":"historical","text":"كان عندي ألم في الصدر قبل سنوات","detected":false,"level":"none","rule_codes":[]},
+    {"id":"ar-family","language":"ar","category":"family","text":"ابي عنده ألم في الصدر","detected":false,"level":"none","rule_codes":[]},
+    {"id":"ckb-positive","language":"ckb","category":"positive","text":"ئازاری سینە هەیە","detected":true,"level":"emergency","rule_codes":["chest_pain"]},
+    {"id":"ckb-negated","language":"ckb","category":"negated","text":"من ئازاری سینە نییە","detected":false,"level":"none","rule_codes":[]},
+    {"id":"ckb-family","language":"ckb","category":"family","text":"باوکم ئازاری سینە هەیە","detected":false,"level":"none","rule_codes":[]},
+    {"id":"mixed-positive","language":"ar","category":"mixed","text":"عندي severe chest pain الآن","detected":true,"level":"emergency","rule_codes":["chest_pain"]},
+    {"id":"long-positive","language":"en","category":"long","text":"This is a long synthetic message with unrelated context and I now have difficulty breathing despite everything else described.","detected":true,"level":"urgent","rule_codes":["breathing_difficulty"]},
+    {"id":"self-harm-strict","language":"en","category":"self_harm","text":"My friend said they want to die","detected":true,"level":"emergency","rule_codes":["self_harm"]}
+  ]
+}
