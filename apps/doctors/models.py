@@ -197,7 +197,7 @@ class DoctorAvailability(BaseModel):
                 name="unique_doctor_availability_slot",
             ),
             models.CheckConstraint(
-                check=models.Q(start_time__lt=models.F("end_time")),
+                condition=models.Q(start_time__lt=models.F("end_time")),
                 name="avail_start_before_end",
             ),
         ]
