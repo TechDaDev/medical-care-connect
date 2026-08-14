@@ -11,10 +11,11 @@ Run with:
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from unittest import skipUnless
 from unittest.mock import patch
 from uuid import uuid4
 
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.test import TransactionTestCase
 from django.utils import timezone
 
@@ -104,6 +105,10 @@ def _submit_call(session):
     )
 
 
+@skipUnless(
+    connection.vendor == "postgresql",
+    "AI intake concurrency tests require PostgreSQL row locking.",
+)
 class IntakeConcurrencyBase(TransactionTestCase):
     reset_sequences = True
 

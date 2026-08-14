@@ -54,12 +54,22 @@ class DeepSeekProvider(AIProvider):
             )
 
     def _call_api(self, client, messages):
+        wire_messages = []
+        for message in messages:
+            content = message["content"]
+            if message.get("message_id"):
+                content = f"[message_id: {message['message_id']}]\n{content}"
+            wire_messages.append({"role": message["role"], "content": content})
         return client.chat.completions.create(
             model=self.model,
-            messages=messages,
+            messages=wire_messages,
             response_format={"type": "json_object"},
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            # DeepSeek V4 defaults to thinking mode. Receptionist output is a
+            # bounded JSON contract; hidden reasoning wastes output budget and
+            # caused deterministic truncation in Phase C live smoke.
+            extra_body={"thinking": {"type": "disabled"}},
         )
 
     def generate_structured_response(

@@ -92,6 +92,7 @@ def _server_intake_context(session, completeness, max_questions_budget: int) -> 
         "allowed_emergency_reason_codes": sorted(
             CONDITIONAL_RELEVANCE_RULES  # placeholder replaced below
         ),
+        "allowed_relevance_rule_codes": sorted(CONDITIONAL_RELEVANCE_RULES),
         "field_statuses_of_interest": {
             name: (metadata.get(name) or {}).get("status", "missing")
             for name in sorted(INTAKE_FIELDS)
