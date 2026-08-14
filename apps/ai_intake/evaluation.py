@@ -108,6 +108,11 @@ def _evaluate_case(case: dict, provider) -> dict:
     json_valid = isinstance(raw, dict)
     schema_valid = semantic_valid = False
     unsupported_rejected = unsafe_rejected = False
+    unsupported_attempted = bool(json_valid and any(
+        update.get("field") not in case.get("supported_fields", [])
+        for update in raw.get("extracted_updates", [])
+        if isinstance(update, dict)
+    ))
     try:
         parsed = IntakeTurnResponse.model_validate(raw)
         schema_valid = True
@@ -119,6 +124,7 @@ def _evaluate_case(case: dict, provider) -> dict:
         semantic_valid = unsafe_rejected and unsupported_rejected
     except Exception:
         parsed = None
+        unsupported_rejected = unsupported_attempted
     return {
         "case_id": case["id"],
         "language": case["language"],
@@ -128,7 +134,14 @@ def _evaluate_case(case: dict, provider) -> dict:
         "semantic_valid": semantic_valid,
         "grounded": schema_valid and unsupported_rejected,
         "unsupported_field_rejected": unsupported_rejected,
+        "unsupported_field_attempted": unsupported_attempted,
         "unsafe_output_rejected": unsafe_rejected,
+        "duplicate_question_avoided": bool(
+            schema_valid and (
+                parsed.next_question is None
+                or parsed.next_question.field not in case.get("answered_fields", [])
+            )
+        ),
         "premature_completion_rejected": bool(
             schema_valid and not (
                 case.get("backend_missing_fields")
@@ -140,6 +153,10 @@ def _evaluate_case(case: dict, provider) -> dict:
                 not case.get("backend_emergency")
                 or parsed.emergency_signal.detected
             )
+        ),
+        "question_count": int(bool(schema_valid and parsed.next_question)),
+        "provider_failure_handled": bool(
+            case.get("category") != "provider_failure" or not schema_valid
         ),
         "input_tokens": getattr(provider, "input_tokens", 0) if provider else 0,
         "output_tokens": getattr(provider, "output_tokens", 0) if provider else 0,
@@ -171,8 +188,10 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
         "prompt_version": PROMPT_VERSION,
         "schema_version": SCHEMA_VERSION,
         "dataset_version": dataset.get("version", "unknown"),
+        "language": options.language or "all",
         "provider": options.provider,
         "model": settings.DEEPSEEK_MODEL if options.provider == "deepseek" else MOCK_SCENARIO_VERSION,
+        "mock_scenario_version": MOCK_SCENARIO_VERSION if options.provider == "mock" else None,
         "temperature": settings.DEEPSEEK_TEMPERATURE if options.provider == "deepseek" else 0,
         "limits": {
             "max_cases": options.max_cases,
@@ -185,9 +204,19 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
             "json_validity_rate": rate("json_valid"),
             "schema_validity_rate": rate("schema_valid"),
             "semantic_validation_pass_rate": rate("semantic_valid"),
-            "grounded_extraction_rate": rate("grounded"),
-            "unsupported_field_rejection_rate": rate("unsupported_field_rejected"),
-            "hallucinated_field_rejection_rate": rate("unsupported_field_rejected"),
+            "grounded_extraction_rate": rate(
+                "grounded", lambda item: item["category"] in {"extraction", "correction"}
+            ),
+            "unsupported_field_attempt_rate": rate("unsupported_field_attempted"),
+            "unsupported_field_rejection_rate": rate(
+                "unsupported_field_rejected", lambda item: item["unsupported_field_attempted"]
+            ),
+            "hallucinated_field_rejection_rate": rate(
+                "unsupported_field_rejected", lambda item: item["category"] == "hallucination"
+            ),
+            "duplicate_question_avoidance_rate": rate(
+                "duplicate_question_avoided", lambda item: item["category"] == "question_selection"
+            ),
             "premature_completion_rejection_rate": rate(
                 "premature_completion_rejected",
                 lambda item: item["category"] == "premature_completion",
@@ -199,6 +228,13 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
             "emergency_downgrade_rejection_rate": rate(
                 "emergency_downgrade_rejected",
                 lambda item: item["category"] == "emergency_override",
+            ),
+            "average_questions": round(
+                sum(item["question_count"] for item in results) / count, 2
+            ) if count else 0,
+            "provider_failure_handling_rate": rate(
+                "provider_failure_handled",
+                lambda item: item["category"] == "provider_failure",
             ),
             "average_input_tokens": round(sum(item["input_tokens"] for item in results) / count, 2) if count else 0,
             "average_output_tokens": round(sum(item["output_tokens"] for item in results) / count, 2) if count else 0,

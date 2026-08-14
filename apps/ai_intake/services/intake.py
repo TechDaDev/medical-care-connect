@@ -149,6 +149,15 @@ def _get_provider():
     provider_name = (settings.AI_INTAKE_PROVIDER or "").lower()
     if provider_name == "deepseek":
         return DeepSeekProvider()
+    if provider_name == "mock":
+        if not settings.DEBUG or not getattr(settings, "E2E_LOCAL_ALLOWED", False):
+            raise AIProviderConfigurationError(
+                "Deterministic mock provider is restricted to explicit local E2E runs.",
+                safe_code="mock_provider_forbidden",
+            )
+        from apps.ai_intake.services.mock import DeterministicE2EProvider
+
+        return DeterministicE2EProvider()
     raise AIProviderConfigurationError(
         f"Unsupported AI provider: {provider_name}",
         safe_code="unsupported_provider",

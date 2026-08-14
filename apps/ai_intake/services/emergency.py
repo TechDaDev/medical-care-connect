@@ -74,7 +74,13 @@ def screen_patient_input(text: str) -> dict:
         phrase = normalize_patient_text(rule.pattern, rule.language)
         if phrase not in normalized:
             continue
-        if rule.suppressible and _context_suppresses(normalized, phrase, rule.language):
+        if rule.suppressible and (
+            _context_suppresses(normalized, phrase, rule.language)
+            or (
+                language != rule.language
+                and _context_suppresses(normalized, phrase, language)
+            )
+        ):
             continue
         return {"detected": True, "level": rule.severity, "reasons": [rule.code]}
     return {"detected": False, "level": "none", "reasons": []}
