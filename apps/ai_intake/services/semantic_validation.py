@@ -12,6 +12,7 @@ Pydantic enforces shape. This module enforces meaning:
 """
 
 import re
+import unicodedata
 
 from apps.ai_intake.constants import INTAKE_FIELDS
 
@@ -60,6 +61,64 @@ ANSWERED_STATUS = "answered"
 _TOKEN_MIN_LEN = 4
 # Include Arabic + Kurdish Unicode ranges plus Latin.
 _TOKEN_RE = re.compile(r"[A-Za-z0-9\u0600-\u06FF\u0750-\u077F]{4,}")
+_GROUNDING_TOKEN_RE = re.compile(r"[a-z0-9\u0600-\u06ff\u0750-\u077f]+")
+_ARABIC_DIACRITICS = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]")
+_GROUNDING_PUNCTUATION = str.maketrans({
+    "،": " ", "؛": " ", "؟": " ", ",": " ", ".": " ",
+    ":": " ", ";": " ", "!": " ", "?": " ", "-": " ",
+    "_": " ", "/": " ", "\\": " ", "(": " ", ")": " ",
+})
+
+# Field-scoped mappings require explicit patient phrases. They bridge safe
+# linguistic variants to canonical intake values without weakening evidence
+# ownership or accepting unrelated facts.
+GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "chief_complaint": {
+        "headache": ("صداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرم دەئێشێ"),
+        "dizziness": ("دوخة", "دايخ", "سەرگێژ", "سەرگێژم"),
+        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون"),
+    },
+    "symptoms": {
+        "headache": ("صداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرم دەئێشێ"),
+        "dizziness": ("دوخة", "دايخ", "سەرگێژ", "سەرگێژم"),
+        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون"),
+    },
+    "associated_symptoms": {
+        "dizziness": ("دوخة", "دايخ", "سەرگێژ", "سەرگێژم"),
+        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون"),
+    },
+    "duration": {
+        "two days": ("يومين", "يومان", "من يومين", "صارلي يومين", "دوو ڕۆژ", "دوو ڕۆژە"),
+        "2 days": ("يومين", "يومان", "من يومين", "صارلي يومين", "دوو ڕۆژ", "دوو ڕۆژە"),
+        "since yesterday": ("من امس", "من البارحه", "من البارحة", "لە دوێنێ", "دوێنێوە"),
+        "one day": ("يوم واحد", "من البارحه", "من البارحة", "ڕۆژێک"),
+    },
+    "onset": {
+        "yesterday": ("امس", "البارحه", "البارحة", "دوێنێ", "لە دوێنێ"),
+        "since yesterday": ("من امس", "من البارحه", "من البارحة", "لە دوێنێ", "دوێنێوە"),
+    },
+    "severity": {
+        "severe": ("شديد", "شديدة", "كلش قوي", "هوايه قوي", "زۆر توند", "توندە"),
+        "mild": ("خفيف", "خفيفة", "شويه", "کەم", "سووک"),
+        "moderate": ("متوسط", "متوسطة", "مامناوه ند", "مامناوەند"),
+    },
+    "location": {
+        "head": ("الراس", "الرأس", "راسي", "سەر", "سەرم"),
+        "chest": ("الصدر", "صدري", "سنگ", "سنگم"),
+        "abdomen": ("البطن", "بطني", "سك", "سک", "سکم"),
+    },
+    "current_medications": {
+        "metformin": ("ميتفورمين", "متفورمين", "میتفۆرمین"),
+        "paracetamol": ("باراسيتامول", "بنادول", "پاراسیتامۆل"),
+    },
+    "allergies": {
+        "penicillin": ("بنسلين", "پنسلین"),
+    },
+    "pregnancy_possible": {
+        "true": ("i am pregnant", "pregnancy is possible", "انا حامل", "اني حامل", "من دووگیانم"),
+        "false": ("not pregnant", "pregnancy is not possible", "لست حاملا", "مو حامل", "دووگیان نیم"),
+    },
+}
 
 
 class SemanticValidationError(Exception):
@@ -84,6 +143,62 @@ def _significant_tokens(text) -> set[str]:
     return set(_TOKEN_RE.findall(str(text).lower()))
 
 
+def normalize_grounding_text(text) -> str:
+    """Normalize orthographic variants while preserving clinical meaning."""
+    value = unicodedata.normalize(
+        "NFKC", "" if text is None else str(text)
+    ).casefold()
+    value = value.replace("ـ", "")
+    value = _ARABIC_DIACRITICS.sub("", value)
+    value = value.translate(str.maketrans({
+        "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+        "ى": "ي", "ی": "ي", "ئ": "ي",
+        "ک": "ك",
+    }))
+    value = value.translate(_GROUNDING_PUNCTUATION)
+    return " ".join(_GROUNDING_TOKEN_RE.findall(value))
+
+
+def _canonical_alias_grounded(field: str, value, evidence_text: str) -> bool:
+    aliases = GROUNDING_CANONICAL_ALIASES.get(field, {})
+    evidence = normalize_grounding_text(evidence_text)
+    values = value if isinstance(value, list) else [value]
+    for item in values:
+        normalized_value = normalize_grounding_text(item)
+        item_grounded = False
+        for canonical, phrases in aliases.items():
+            normalized_canonical = normalize_grounding_text(canonical)
+            if normalized_value != normalized_canonical:
+                continue
+            if any(normalize_grounding_text(phrase) in evidence for phrase in phrases):
+                item_grounded = True
+                break
+        if not item_grounded:
+            return False
+    return bool(values)
+
+
+def grounding_classification(update, evidence_text: str) -> str:
+    """Return literal, normalized, canonical, structured, or unsupported."""
+    values = update.value if isinstance(update.value, list) else [update.value]
+    values = [value for value in values if value is not None and str(value).strip()]
+    if not values:
+        return "structured"
+    raw_evidence = str(evidence_text or "").casefold()
+    if all(str(value).casefold() in raw_evidence for value in values):
+        return "literal"
+    normalized_evidence = normalize_grounding_text(evidence_text)
+    if all(
+        normalize_grounding_text(value)
+        and normalize_grounding_text(value) in normalized_evidence
+        for value in values
+    ):
+        return "normalized"
+    if _canonical_alias_grounded(update.field, update.value, evidence_text):
+        return "canonical"
+    return "unsupported"
+
+
 def _grounded(update, evidence_text: str) -> bool:
     """Check that the extracted value is lexically grounded in evidence.
 
@@ -92,12 +207,7 @@ def _grounded(update, evidence_text: str) -> bool:
     This rejects fabricated facts while remaining safe (a miss only forces a
     re-ask; it never blocks clinical content because none exists here).
     """
-    value_tokens = _significant_tokens(update.value)
-    if not value_tokens:
-        # Structured values (bool/int) or empty — no lexical claim to verify.
-        return True
-    evidence_tokens = _significant_tokens(evidence_text)
-    return bool(value_tokens & evidence_tokens)
+    return grounding_classification(update, evidence_text) != "unsupported"
 
 
 def _value_type_matches(field_type: str | None, value) -> bool:

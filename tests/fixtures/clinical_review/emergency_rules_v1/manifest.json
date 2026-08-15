@@ -1,0 +1,7 @@
+{
+  "ruleset_version": "mcc-emergency-rules-v1",
+  "clinical_review_status": "unreviewed",
+  "approved_fixture_count": 0,
+  "fixtures": [],
+  "synthetic_only": true
+}

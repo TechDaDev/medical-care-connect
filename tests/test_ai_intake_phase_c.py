@@ -16,7 +16,7 @@ from apps.ai_intake.emergency_rules.review import (
     import_review_csv,
 )
 from apps.ai_intake.evaluation import (
-    LIVE_DATASET_VERSION,
+    LEGACY_LIVE_DATASET_VERSION,
     EvaluationOptions,
     EvaluationSafetyError,
     load_dataset,
@@ -35,7 +35,7 @@ class PhaseCLiveEvaluationTests(SimpleTestCase):
         self.dataset = load_dataset(LIVE_DATASET)
 
     def test_live_dataset_is_versioned_synthetic_and_bounded(self):
-        self.assertEqual(self.dataset["version"], LIVE_DATASET_VERSION)
+        self.assertEqual(self.dataset["version"], LEGACY_LIVE_DATASET_VERSION)
         self.assertEqual(len(self.dataset["cases"]), 20)
         self.assertTrue(all(case["synthetic"] is True for case in self.dataset["cases"]))
         self.assertEqual(
@@ -148,10 +148,10 @@ class PhaseCLiveEvaluationTests(SimpleTestCase):
 
     def test_invalid_dataset_variants_are_refused(self):
         variants = [
-            {"synthetic": False, "version": LIVE_DATASET_VERSION, "cases": []},
-            {"synthetic": True, "version": LIVE_DATASET_VERSION, "cases": [{}]},
-            {"synthetic": True, "version": LIVE_DATASET_VERSION, "cases": [
-                {"case_id": "x", "dataset_version": LIVE_DATASET_VERSION,
+            {"synthetic": False, "version": LEGACY_LIVE_DATASET_VERSION, "cases": []},
+            {"synthetic": True, "version": LEGACY_LIVE_DATASET_VERSION, "cases": [{}]},
+            {"synthetic": True, "version": LEGACY_LIVE_DATASET_VERSION, "cases": [
+                {"case_id": "x", "dataset_version": LEGACY_LIVE_DATASET_VERSION,
                  "language": "en", "category": "x", "synthetic": False,
                  "turns": [], "expected": {}}
             ]},

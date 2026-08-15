@@ -16,9 +16,9 @@ ALLOWED_DISPOSITIONS = {
 DECISIONS_REQUIRING_REVIEWER = {"approved", "approved_with_changes", "rejected"}
 REVIEW_FIELDS = (
     "rule_id", "rule_code", "ruleset_version", "rule_version", "language",
-    "severity", "pattern", "pattern_type", "positive_examples",
+    "severity", "normalized_category", "safe_example", "pattern", "pattern_type", "positive_examples",
     "negative_examples", "negation_examples", "historical_examples",
-    "family_context_examples", "ambiguity_notes", "enabled",
+    "family_context_examples", "hypothetical_context_examples", "ambiguity_notes", "enabled",
     "clinician_review_status", "reviewer", "reviewer_role", "review_date",
     "disposition", "review_notes",
 )
@@ -36,6 +36,7 @@ def _examples(rule) -> dict[str, str]:
             "negation_examples": f"Synthetic patient says they do not have: {rule.pattern}",
             "historical_examples": f"Synthetic patient had this three years ago: {rule.pattern}",
             "family_context_examples": f"Synthetic family member has: {rule.pattern}",
+            "hypothetical_context_examples": f"Synthetic hypothetical statement: if I had {rule.pattern}.",
         }
     if rule.language == "ar":
         return {
@@ -44,6 +45,7 @@ def _examples(rule) -> dict[str, str]:
             "negation_examples": f"مثال اصطناعي منفي: لا أعاني من {rule.pattern}",
             "historical_examples": f"مثال اصطناعي تاريخي قبل ثلاث سنوات: {rule.pattern}",
             "family_context_examples": f"مثال اصطناعي عن فرد من العائلة: {rule.pattern}",
+            "hypothetical_context_examples": f"مثال اصطناعي افتراضي: لو كان عندي {rule.pattern}",
         }
     return {
         "positive_examples": f"نموونەی دەستکردی ئێستا: {rule.pattern}",
@@ -51,6 +53,7 @@ def _examples(rule) -> dict[str, str]:
         "negation_examples": f"نموونەی دەستکردی نەرێنی: {rule.pattern} نییە",
         "historical_examples": f"نموونەی دەستکردی مێژوویی: {rule.pattern}",
         "family_context_examples": f"نموونەی دەستکرد بۆ خێزان: {rule.pattern}",
+        "hypothetical_context_examples": f"نموونەی دەستکردی گریمانەیی: ئەگەر {rule.pattern} هەبوو.",
     }
 
 
@@ -64,6 +67,8 @@ def review_rows() -> list[dict[str, str]]:
             "rule_version": rule.version,
             "language": rule.language,
             "severity": rule.severity,
+            "normalized_category": rule.code,
+            "safe_example": _examples(rule)["positive_examples"],
             "pattern": rule.pattern,
             "pattern_type": rule.pattern_type,
             "ambiguity_notes": "Clinician assessment required.",
@@ -113,6 +118,12 @@ def import_review_csv(path: str | Path) -> list[dict]:
             raise ReviewValidationError("Emergency ruleset version mismatch.")
         if row["rule_version"] != rule.version:
             raise ReviewValidationError(f"Rule version mismatch: {rule_id}")
+        if row["language"] != rule.language:
+            raise ReviewValidationError(f"Review import cannot alter language: {rule_id}")
+        if row["severity"] != rule.severity:
+            raise ReviewValidationError(f"Review import cannot alter severity: {rule_id}")
+        if row["normalized_category"] != rule.code:
+            raise ReviewValidationError(f"Review import cannot alter category: {rule_id}")
         if row["pattern"] != rule.pattern or row["pattern_type"] != rule.pattern_type:
             raise ReviewValidationError(f"Review import cannot alter pattern: {rule_id}")
         if row["enabled"].lower() != str(rule.enabled).lower():
@@ -121,11 +132,14 @@ def import_review_csv(path: str | Path) -> list[dict]:
         if disposition not in ALLOWED_DISPOSITIONS:
             raise ReviewValidationError(f"Invalid disposition: {disposition}")
         reviewer = row["reviewer"].strip()
+        reviewer_role = row["reviewer_role"].strip()
         review_date = row["review_date"].strip()
         if disposition in DECISIONS_REQUIRING_REVIEWER and not reviewer:
             raise ReviewValidationError(f"Reviewer required for {disposition}: {rule_id}")
         if disposition in DECISIONS_REQUIRING_REVIEWER and not review_date:
             raise ReviewValidationError(f"Review date required for {disposition}: {rule_id}")
+        if disposition in DECISIONS_REQUIRING_REVIEWER and not reviewer_role:
+            raise ReviewValidationError(f"Reviewer role required for {disposition}: {rule_id}")
         if review_date:
             try:
                 date.fromisoformat(review_date)
@@ -142,7 +156,7 @@ def import_review_csv(path: str | Path) -> list[dict]:
             "enabled": rule.enabled,
             "disposition": disposition,
             "reviewer": reviewer,
-            "reviewer_role": row["reviewer_role"].strip(),
+            "reviewer_role": reviewer_role,
             "review_date": review_date,
             "review_notes": row["review_notes"].strip(),
         })

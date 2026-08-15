@@ -18,11 +18,12 @@ class Command(BaseCommand):
         default_dataset = Path(__file__).resolve().parents[4] / "tests/fixtures/ai_intake_evaluation_cases.json"
         parser.add_argument("--provider", choices=["mock", "deepseek"], default="mock")
         parser.add_argument("--dataset", default=str(default_dataset))
-        parser.add_argument("--language", choices=["en", "ar", "ckb"])
+        parser.add_argument("--language", choices=["en", "ar", "ar-IQ", "ckb", "mixed"])
         parser.add_argument("--case-id")
         parser.add_argument("--max-cases", type=int, default=20)
         parser.add_argument("--output-json")
         parser.add_argument("--allow-live-provider", action="store_true")
+        parser.add_argument("--allow-final-blinded", action="store_true")
         parser.add_argument("--patient-id")
         parser.add_argument("--consultation-id")
         parser.add_argument("--database-source", action="store_true")
@@ -41,6 +42,7 @@ class Command(BaseCommand):
                 patient_id=options.get("patient_id"),
                 consultation_id=options.get("consultation_id"),
                 database_source=options.get("database_source", False),
+                allow_final_blinded=options.get("allow_final_blinded", False),
             ))
         except (EvaluationSafetyError, OSError, json.JSONDecodeError) as exc:
             raise CommandError(
