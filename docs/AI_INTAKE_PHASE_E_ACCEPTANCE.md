@@ -288,15 +288,15 @@ Runtime/test/dataset commit `9cd5fce4cad636c8755426031630124cf46f3ac7`. Evidence
 
 ## 72. Railway deployment
 
-`PENDING_RAILWAY`
+Automatic backend deployment `e0ab4b5c-a8b8-4af1-8a39-f388fabb5290` verified at evidence commit `0a8b3ced5841722213a77a08e3787dcab4ce7530`: `SUCCESS` / `RUNNING`. Logs show no pending migration and four Gunicorn workers. No manual deployment used. Frontend remained at successful unchanged commit `b502e8ca751a4b65c1d4f12502f7bf9f61db5dfe`.
 
 ## 73. Production smoke
 
-`PENDING_PRODUCTION_SMOKE`
+Read-only backend health 200 (`healthy`), readiness 200 (database/storage ready), and frontend root 200. No production intake mutation or live-provider request executed.
 
 ## 74. Synthetic cleanup
 
-`PENDING_CLEANUP`
+Temporary live reports/logs/sanitized probes, review artifacts, baseline worktree, browser results, smoke containers, and run-scoped storage artifacts removed. Test DB absent. Synthetic model/storage hits 0. Protected `docs/project-skills.md` remained untracked, unstaged, uncommitted, and SHA-256 `01b5f48d80f1b577b938142fd206706e78c2af87a24caf0d6eb2230e0f3010a4`.
 
 ## 75. Known limitations
 
