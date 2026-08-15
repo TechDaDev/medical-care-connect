@@ -19,6 +19,7 @@ from django.conf import settings
 from pydantic import ValidationError
 
 from apps.ai_intake.constants import CONDITIONAL_RELEVANCE_RULES, INTAKE_FIELDS
+from apps.ai_intake.emergency_rules.registry import ALL_RULES, RULESET_VERSION
 from apps.ai_intake.prompts import PROMPT_VERSION, SYSTEM_POLICY_PROMPT, _output_contract
 from apps.ai_intake.schemas import IntakeTurnResponse
 from apps.ai_intake.services.base import AIProviderError
@@ -30,20 +31,27 @@ from apps.ai_intake.services.semantic_validation import (
     EMERGENCY_REASON_CODES,
     _grounded,
     _is_prohibited,
-    grounding_classification,
+    grounding_evidence,
 )
 
 SCHEMA_VERSION = "mcc-intake-v2"
 MOCK_SCENARIO_VERSION = "phase-b-mock-v1"
 LEGACY_LIVE_DATASET_VERSION = "mcc-ai-intake-eval-v2"
 LIVE_DATASET_VERSION = "mcc-ai-intake-eval-v3"
-SUPPORTED_LIVE_DATASET_VERSIONS = {LEGACY_LIVE_DATASET_VERSION, LIVE_DATASET_VERSION}
+PHASE_E_DATASET_VERSION = "mcc-ai-intake-eval-v4"
+SPLIT_DATASET_VERSIONS = {LIVE_DATASET_VERSION, PHASE_E_DATASET_VERSION}
+SUPPORTED_LIVE_DATASET_VERSIONS = {LEGACY_LIVE_DATASET_VERSION, *SPLIT_DATASET_VERSIONS}
 SUPPORTED_EVALUATION_LANGUAGES = {"en", "ar", "ar-IQ", "ckb", "mixed"}
 FORBIDDEN_CASE_KEYS = {
     "patient_id", "consultation_id", "medical_record_id", "user_id",
     "database_source", "database_query", "patient_name",
 }
 SUPPORTED_LIVE_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
+GROUNDING_EVALUATION_CATEGORIES = {
+    "extraction", "correction", "duration", "onset", "severity", "location",
+    "medication", "allergy", "negation", "spelling", "fragmented", "long_answer",
+    "mixed_terms", "previous_episode",
+}
 
 
 class EvaluationSafetyError(ValueError):
@@ -86,7 +94,7 @@ def load_dataset(path: str | Path) -> dict:
             "case_id", "dataset_version", "language", "category", "synthetic",
             "turns", "expected",
         }
-        if payload.get("version") == LIVE_DATASET_VERSION:
+        if payload.get("version") in SPLIT_DATASET_VERSIONS:
             required.add("split")
             split = payload.get("split")
             if split not in {"development", "validation", "final"}:
@@ -105,7 +113,7 @@ def load_dataset(path: str | Path) -> dict:
                 raise EvaluationSafetyError("Live evaluation case has unsupported language.")
             if FORBIDDEN_CASE_KEYS & set(case):
                 raise EvaluationSafetyError("Evaluation case contains application or patient identifiers.")
-            if payload.get("version") == LIVE_DATASET_VERSION and case["split"] != payload["split"]:
+            if payload.get("version") in SPLIT_DATASET_VERSIONS and case["split"] != payload["split"]:
                 raise EvaluationSafetyError("Evaluation case split does not match dataset split.")
             if not re.fullmatch(r"[a-z0-9-]{3,80}", case["case_id"]):
                 raise EvaluationSafetyError("Live evaluation case id is invalid.")
@@ -313,7 +321,7 @@ def _evaluate_case(case: dict, provider) -> dict:
     backend_emergency = screen_patient_input(_case_input(case))
     emergency_input = bool(expected.get("backend_emergency"))
     if (
-        case.get("dataset_version") == LIVE_DATASET_VERSION
+        case.get("dataset_version") in SPLIT_DATASET_VERSIONS
         and backend_emergency["detected"]
     ):
         return {
@@ -331,6 +339,7 @@ def _evaluate_case(case: dict, provider) -> dict:
             "semantic_valid": None,
             "grounded": None,
             "grounding_classifications": [],
+            "grounding_assessments": [],
             "unsupported_field_rejected": True,
             "unsupported_field_attempted": False,
             "unsupported_field_accepted": False,
@@ -402,13 +411,21 @@ def _evaluate_case(case: dict, provider) -> dict:
             or not {str(message_id) for message_id in update.source_message_ids} <= patient_ids
             for update in parsed.extracted_updates
         )
-        grounding_classifications = [
-            grounding_classification(
-                update,
-                " ".join(evidence_by_id.get(str(message_id), "") for message_id in update.source_message_ids),
-            )
-            for update in parsed.extracted_updates
-        ]
+        grounding_assessments = []
+        for update in parsed.extracted_updates:
+            message_ids = [str(message_id) for message_id in update.source_message_ids]
+            evidence_text = " ".join(evidence_by_id.get(message_id, "") for message_id in message_ids)
+            assessment = grounding_evidence(update, evidence_text)
+            grounding_assessments.append({
+                "field": update.field,
+                "classification": assessment.classification,
+                "message_ids": message_ids,
+                "evidence_span": (
+                    {"start": assessment.evidence_span.start, "end": assessment.evidence_span.end}
+                    if assessment.evidence_span and len(message_ids) == 1 else None
+                ),
+            })
+        grounding_classifications = [item["classification"] for item in grounding_assessments]
         ungrounded_evidence = "unsupported" in grounding_classifications
         unsupported_attempted = unsupported_attempted or invalid_evidence or ungrounded_evidence
         unsupported_rejected = unsupported_attempted
@@ -416,6 +433,7 @@ def _evaluate_case(case: dict, provider) -> dict:
         semantic_valid = not unsafe_attempted and not unsupported_attempted and not repeated
     except Exception as exc:
         grounding_classifications = []
+        grounding_assessments = []
         if isinstance(exc, ValidationError):
             schema_error_codes = [
                 {
@@ -490,6 +508,7 @@ def _evaluate_case(case: dict, provider) -> dict:
         "semantic_valid": semantic_valid,
         "grounded": grounded,
         "grounding_classifications": grounding_classifications,
+        "grounding_assessments": grounding_assessments,
         "unsupported_field_rejected": unsupported_rejected,
         "unsupported_field_attempted": unsupported_attempted,
         "unsupported_field_accepted": bool(unsupported_attempted and semantic_valid),
@@ -547,7 +566,7 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
         ) if applicable else None
     provider_results = [item for item in results if item["provider_called"]]
     latencies = [item["latency_ms"] for item in provider_results]
-    if dataset.get("version") == LIVE_DATASET_VERSION:
+    if dataset.get("version") in SPLIT_DATASET_VERSIONS:
         question_applicable = lambda item: (
             item["provider_called"]
             and item["category"] in {"question_selection", "ambiguity"}
@@ -567,9 +586,7 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
     def language_summary(language: str) -> dict:
         items = [item for item in results if item["language"] == language]
         called = [item for item in items if item["provider_called"]]
-        extraction = [
-            item for item in called if item["category"] in {"extraction", "correction"}
-        ]
+        extraction = [item for item in called if item["category"] in GROUNDING_EVALUATION_CATEGORIES]
         questions = [
             item for item in called if item["category"] in {"question_selection", "ambiguity"}
         ]
@@ -584,6 +601,9 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
             "question_repeat_rate": round(sum(not item["duplicate_question_avoided"] for item in questions) / len(questions), 4) if questions else None,
             "language_consistency_rate": round(sum(item["language_consistent"] for item in called) / len(called), 4) if called else None,
             "average_latency_ms": round(sum(item["latency_ms"] for item in called) / len(called), 2) if called else None,
+            "unsupported_field_acceptances": sum(item["unsupported_field_accepted"] for item in called),
+            "hallucination_acceptances": sum(item["hallucination_accepted"] for item in called),
+            "emergency_bypasses": sum(not item["provider_called"] for item in items),
         }
 
     languages = sorted({item["language"] for item in results})
@@ -597,7 +617,7 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
         "schema_validity_rate": rate("schema_valid", lambda item: item["provider_called"]),
         "semantic_validation_pass_rate": rate("semantic_valid", lambda item: item["provider_called"]),
         "grounded_extraction_rate": rate(
-            "grounded", lambda item: item["provider_called"] and item["category"] in {"extraction", "correction"}
+            "grounded", lambda item: item["provider_called"] and item["category"] in GROUNDING_EVALUATION_CATEGORIES
         ),
         "grounding_classifications": dict(sorted(grounding_counts.items())),
         "unsupported_field_attempts": sum(item["unsupported_field_attempted"] for item in results),
@@ -683,6 +703,7 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
             "provider_failure_handled", lambda item: item["category"] == "provider_failure"
         ),
     }
+    review_counts = Counter(rule.clinician_review_status for rule in ALL_RULES)
     thresholds = {
         "json_validity": {"target": 0.99, "actual": metrics["json_validity_rate"], "passed": (metrics["json_validity_rate"] or 0) >= 0.99},
         "schema_validity": {"target": 0.99, "actual": metrics["schema_validity_rate"], "passed": (metrics["schema_validity_rate"] or 0) >= 0.99},
@@ -719,5 +740,12 @@ def run_evaluation(dataset: dict, options: EvaluationOptions) -> dict:
         "metrics": metrics,
         "thresholds": thresholds,
         "technical_acceptance_passed": all(item["passed"] for item in thresholds.values()),
+        "clinical_review": {
+            "ruleset_version": RULESET_VERSION,
+            "rule_count": len(ALL_RULES),
+            "by_language": dict(sorted(Counter(rule.language for rule in ALL_RULES).items())),
+            "dispositions": dict(sorted(review_counts.items())),
+            "status": "unreviewed" if review_counts.get("unreviewed", 0) == len(ALL_RULES) else "in_progress",
+        },
         "results": results,
     }

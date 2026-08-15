@@ -418,6 +418,8 @@ class PhaseDClinicianReviewTests(SimpleTestCase):
                     changes.update({
                         "reviewer": "synthetic-qualified-reviewer-id",
                         "reviewer_role": "synthetic-clinician-role",
+                        "reviewer_qualification": "synthetic-licensed-clinician",
+                        "reviewer_language_competence": "en",
                         "review_date": "2026-08-15",
                     })
                 self._rewrite(path, **changes)

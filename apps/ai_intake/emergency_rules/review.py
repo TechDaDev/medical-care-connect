@@ -1,6 +1,7 @@
 """Synthetic-only clinician review export and validated disposition import."""
 
 import csv
+import re
 from datetime import date
 from pathlib import Path
 
@@ -20,7 +21,7 @@ REVIEW_FIELDS = (
     "negative_examples", "negation_examples", "historical_examples",
     "family_context_examples", "hypothetical_context_examples", "ambiguity_notes", "enabled",
     "clinician_review_status", "reviewer", "reviewer_role", "review_date",
-    "disposition", "review_notes",
+    "reviewer_qualification", "reviewer_language_competence", "disposition", "review_notes",
 )
 
 
@@ -76,6 +77,8 @@ def review_rows() -> list[dict[str, str]]:
             "clinician_review_status": rule.clinician_review_status,
             "reviewer": "",
             "reviewer_role": "",
+            "reviewer_qualification": "",
+            "reviewer_language_competence": "",
             "review_date": "",
             "disposition": rule.clinician_review_status,
             "review_notes": "",
@@ -133,6 +136,8 @@ def import_review_csv(path: str | Path) -> list[dict]:
             raise ReviewValidationError(f"Invalid disposition: {disposition}")
         reviewer = row["reviewer"].strip()
         reviewer_role = row["reviewer_role"].strip()
+        reviewer_qualification = row["reviewer_qualification"].strip()
+        reviewer_language_competence = row["reviewer_language_competence"].strip()
         review_date = row["review_date"].strip()
         if disposition in DECISIONS_REQUIRING_REVIEWER and not reviewer:
             raise ReviewValidationError(f"Reviewer required for {disposition}: {rule_id}")
@@ -140,6 +145,16 @@ def import_review_csv(path: str | Path) -> list[dict]:
             raise ReviewValidationError(f"Review date required for {disposition}: {rule_id}")
         if disposition in DECISIONS_REQUIRING_REVIEWER and not reviewer_role:
             raise ReviewValidationError(f"Reviewer role required for {disposition}: {rule_id}")
+        if disposition in DECISIONS_REQUIRING_REVIEWER and not reviewer_qualification:
+            raise ReviewValidationError(f"Reviewer qualification required for {disposition}: {rule_id}")
+        language_competence = {
+            item.strip() for item in re.split(r"[,;\s]+", reviewer_language_competence)
+            if item.strip()
+        }
+        if disposition in DECISIONS_REQUIRING_REVIEWER and rule.language not in language_competence:
+            raise ReviewValidationError(
+                f"Reviewer language competence must include {rule.language}: {rule_id}"
+            )
         if review_date:
             try:
                 date.fromisoformat(review_date)
@@ -157,6 +172,8 @@ def import_review_csv(path: str | Path) -> list[dict]:
             "disposition": disposition,
             "reviewer": reviewer,
             "reviewer_role": reviewer_role,
+            "reviewer_qualification": reviewer_qualification,
+            "reviewer_language_competence": reviewer_language_competence,
             "review_date": review_date,
             "review_notes": row["review_notes"].strip(),
         })
