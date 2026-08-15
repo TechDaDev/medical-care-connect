@@ -41,8 +41,10 @@ Final blinded: one complete 25-case run, 20 successful calls, 5 bypasses, 0 fail
 - Codebase graph refreshed: backend 4,142 nodes / 18,607 edges; frontend 7,017 nodes / 9,651 edges. Evaluation, grounding, review, provider, and dynamic test/command paths classified.
 - Cleanup: temporary reports/CSV/logs, browser artifacts, test database, smoke containers/network, and run-scoped synthetic DB/storage objects are zero.
 - Protected `docs/project-skills.md`: untouched, untracked, unstaged, uncommitted; SHA-256 `01b5f48d80f1b577b938142fd206706e78c2af87a24caf0d6eb2230e0f3010a4`.
-- Git push and automatic Railway deployment remain final external gates for this pre-release snapshot.
+- Git: frontend `b502e8ca751a4b65c1d4f12502f7bf9f61db5dfe`; backend runtime `47622f3f23672a00de25494a6691ae4c263ec17b`, both pushed to `main`.
+- Railway automatic deployment: frontend `366e9b24-02f4-4eb5-bde6-372259569d3a`; backend `9d5b8081-0e9e-4f2c-8f65-16bd27b512d5`. Both `SUCCESS` / `RUNNING` at exact commits; no manual deployment used. Backend logs show no pending migration and four running Gunicorn workers.
+- Production read-only smoke: backend health 200, readiness 200 with database/storage ready, frontend root 200. No production intake or live-provider evaluation was executed.
 
-`SOFTWARE PHASE D: PARTIAL`
+`SOFTWARE PHASE D: COMPLETE`
 
 `EMERGENCY CLINICAL REVIEW: UNREVIEWED`
