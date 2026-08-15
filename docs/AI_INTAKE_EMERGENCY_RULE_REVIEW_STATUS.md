@@ -1,6 +1,6 @@
 # AI Intake Emergency Rule Review Status
 
-Snapshot date: 2026-08-14
+Snapshot date: 2026-08-15
 
 - Ruleset: `mcc-emergency-rules-v1`
 - Total rule rows: 56
@@ -15,3 +15,5 @@ Snapshot date: 2026-08-14
 - Runtime enabled: 56
 
 Runtime enablement and clinician-review status remain separate. Current rules are technical safeguards, not clinically validated rules.
+
+Phase E import additionally requires reviewer qualification and documented competence in each reviewed rule's exact language. No reviewer evidence was supplied, so no disposition or runtime version changed. See `AI_INTAKE_CLINICAL_REVIEW_EXECUTION.md`.
