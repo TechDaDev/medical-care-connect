@@ -1,5 +1,7 @@
 # AI Intake Architecture
 
+> Phase F authority update: deterministic completeness now produces allowed and preferred next fields. Provider may word preferred field but cannot select arbitrary targets. See [ADR 0008](adr/0008-deterministic-ai-intake-question-target.md) and `AI_INTAKE_QUESTION_SELECTION.md`.
+
 Phase A of the AI intake feature hardens the DeepSeek receptionist that
 interviews a patient before doctor review. This document describes the full
 architecture, authority boundaries, and safety controls. It is part of the
