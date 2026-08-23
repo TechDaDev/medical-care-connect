@@ -132,7 +132,7 @@ class PhaseDGroundingTests(SimpleTestCase):
                 self.update("duration", "two days"),
                 "حالة اصطناعية: صارلي يومين تعبان.",
             ),
-            "canonical",
+            "structured_numeric",
         )
 
     def test_mixed_language_canonical_match(self):
@@ -141,7 +141,7 @@ class PhaseDGroundingTests(SimpleTestCase):
                 self.update("duration", "two days"),
                 "Synthetic headache صارلي يومين.",
             ),
-            "canonical",
+            "structured_numeric",
         )
         self.assertEqual(
             grounding_classification(
@@ -319,10 +319,10 @@ class PhaseDEvaluationTests(SimpleTestCase):
             expected_next_fields=["severity"],
         )
         repeated["mock_response"] = self._response(next_field="duration")
-        self.assertEqual(
-            _evaluate_case(repeated, None)["question_selection_outcome"],
-            "already_completed",
-        )
+        repeated_result = _evaluate_case(repeated, None)
+        self.assertEqual(repeated_result["question_selection_outcome"], "correct")
+        self.assertTrue(repeated_result["provider_repeated_question"])
+        self.assertTrue(repeated_result["question_target_fallback"])
 
         injection = self._scoring_case(
             category="prompt_injection",

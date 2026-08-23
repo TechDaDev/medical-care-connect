@@ -31,7 +31,7 @@ from apps.ai_intake.models import (
     IntakeSessionStatus,
 )
 from apps.ai_intake.prompts import PROMPT_VERSION, build_ai_messages
-from apps.ai_intake.schemas import IntakeTurnResponse
+from apps.ai_intake.schemas import IntakeTurnResponse, NextQuestion
 from apps.ai_intake.services.base import (
     AIProviderConfigurationError,
     AIProviderDisabled,
@@ -42,6 +42,7 @@ from apps.ai_intake.services.base import (
 from apps.ai_intake.services.completeness import (
     CompletionReason,
     evaluate_completeness,
+    question_target_plan,
 )
 from apps.ai_intake.services.deepseek import DeepSeekProvider
 from apps.ai_intake.services.emergency import screen_patient_input
@@ -329,6 +330,23 @@ def _fallback_question(session) -> str:
     return _("Is there anything else you would like to share before we finish?")
 
 
+def _enforce_question_target(session, validated: IntakeTurnResponse) -> bool:
+    """Replace provider-selected target when it is outside backend plan."""
+    plan = question_target_plan(session)
+    proposed = validated.next_question.field if validated.next_question else None
+    if not plan.allowed_next_fields:
+        validated.next_question = None
+        return proposed is not None
+    if proposed == plan.preferred_next_field:
+        return False
+    field_name = plan.preferred_next_field
+    question = INTAKE_FIELDS[field_name]["question"]
+    validated.conversation_status = "needs_more_information"
+    validated.next_question = NextQuestion(field=field_name, text=question)
+    validated.patient_facing_message = question
+    return True
+
+
 def _build_evidence_messages(session: AIIntakeSession) -> list[dict]:
     """Return bounded role-separated history, EXCLUDING the current turn.
 
@@ -547,10 +565,6 @@ def process_intake_answer(
         _merge_patient_evidence(session, patient_msg)
 
         session.question_count += 1
-        if validated.next_question:
-            session.current_question = validated.next_question.text or _fallback_question(session)
-        else:
-            session.current_question = _fallback_question(session)
         session.input_tokens += provider.input_tokens or 0
         session.output_tokens += provider.output_tokens or 0
         session.total_tokens += provider.total_tokens or 0
@@ -562,10 +576,17 @@ def process_intake_answer(
         # Suggested relevance rules (allowlisted by Pydantic).
         if validated.suggested_relevant_fields:
             session.suggested_relevant_fields = list(
-                dict.fromkeys(session.suggested_relevant_fields or [] + validated.suggested_relevant_fields)
+                dict.fromkeys([
+                    *(session.suggested_relevant_fields or []),
+                    *validated.suggested_relevant_fields,
+                ])
             )
 
         new_completeness = evaluate_completeness(session)
+        question_target_fallback = _enforce_question_target(session, validated)
+        session.current_question = (
+            validated.next_question.text if validated.next_question else ""
+        )
         _sync_missing_fields(session)
 
         # Emergency signal from AI — may only escalate, never reduce.
@@ -609,6 +630,7 @@ def process_intake_answer(
             sequence_number=_next_sequence(session),
             structured_data={
                 "next_question_field": validated.next_question.field if validated.next_question else None,
+                "question_target_fallback": question_target_fallback,
                 "proposed_review": validated.conversation_status == "propose_review",
                 "confirmed_by_backend_gate": new_completeness.can_generate_review_summary,
             },
@@ -632,6 +654,7 @@ def process_intake_answer(
                 "state": session.status,
                 "provider_calls": 1,
                 "prompt_version": PROMPT_VERSION,
+                "question_target_fallback": question_target_fallback,
             },
         )
 

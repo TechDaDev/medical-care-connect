@@ -881,7 +881,7 @@ class DuplicateTurnInvestigationTests(IntakePhaseABase):
                 self.assertEqual(patient2.count("first synthetic answer"), 1)
                 self.assertEqual(patient2.count("second synthetic answer"), 1)
                 assistant2 = [m["content"] for m in messages2 if m["role"] == "assistant"]
-                self.assertEqual(assistant2.count("Thank you. How long?"), 1)
+                self.assertEqual(len(assistant2), 1)
                 self.assertEqual(
                     len([m for m in messages2 if m["role"] == "system"]), 3
                 )

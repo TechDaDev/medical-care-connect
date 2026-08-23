@@ -1,4 +1,4 @@
-"""Deterministic intake completeness engine.
+"""Deterministic intake completeness and next-question target engine.
 
 DeepSeek may propose review. Only this engine decides:
 - can_generate_review_summary;
@@ -11,8 +11,10 @@ The engine reads the per-field metadata map stored on the session
 (see AIIntakeSession.field_metadata) and never trusts AI wording.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
+from types import SimpleNamespace
 
 from django.conf import settings
 
@@ -58,6 +60,14 @@ class CompletenessResult:
     can_submit_to_doctor: bool = False
     emergency_stopped: bool = False
     reason_code: str = CompletionReason.REQUIRED_INFORMATION_MISSING.value
+
+
+@dataclass(frozen=True)
+class QuestionTargetPlan:
+    """Backend-authoritative fields that may be asked next."""
+
+    allowed_next_fields: list[str] = field(default_factory=list)
+    preferred_next_field: str | None = None
 
 
 def _max_questions() -> int:
@@ -134,7 +144,8 @@ def evaluate_completeness(session) -> CompletenessResult:
     missing_non_blocking = []
     reason = CompletionReason.REQUIRED_INFORMATION_MISSING
 
-    for name in sorted(required):
+    # Registry order is deliberate question priority. Do not alphabetize it.
+    for name in (field_name for field_name in INTAKE_FIELDS if field_name in required):
         st = _field_status(metadata, name)
         if st == "answered":
             continue
@@ -212,6 +223,66 @@ def evaluate_completeness(session) -> CompletenessResult:
         emergency_stopped=status == "emergency_stopped",
         reason_code=reason.value,
     )
+
+
+def question_target_plan(session) -> QuestionTargetPlan:
+    """Return deterministic allowed and preferred next fields.
+
+    Provider may word a question, but it cannot select outside this plan.
+    Emergency/terminal/review-ready sessions never have a next target.
+    """
+    completeness = evaluate_completeness(session)
+    if completeness.emergency_stopped or session.status == "cancelled":
+        return QuestionTargetPlan()
+    allowed = list(completeness.missing_blocking_fields)
+    if not allowed:
+        return QuestionTargetPlan()
+    return QuestionTargetPlan(
+        allowed_next_fields=allowed,
+        preferred_next_field=allowed[0],
+    )
+
+
+def projected_question_target_plan(
+    session,
+    extracted_updates,
+    uncertain_fields,
+    suggested_relevant_fields,
+) -> QuestionTargetPlan:
+    """Plan next target against safe in-memory projection of provider updates."""
+    metadata = deepcopy(session.field_metadata or {})
+    for update in extracted_updates:
+        existing = metadata.get(update.field) or {}
+        if (
+            existing.get("status") == "answered"
+            and existing.get("source") == "patient_message"
+        ):
+            continue
+        metadata[update.field] = {
+            **existing,
+            "value": update.value,
+            "status": "uncertain" if update.certainty == "uncertain" else "answered",
+            "source": "intake_extraction",
+        }
+    for field_name in uncertain_fields:
+        if (metadata.get(field_name) or {}).get("status") != "answered":
+            metadata[field_name] = {
+                **(metadata.get(field_name) or {}),
+                "status": "uncertain",
+                "source": "intake_extraction",
+            }
+    suggested = list(dict.fromkeys([
+        *(getattr(session, "suggested_relevant_fields", []) or []),
+        *(suggested_relevant_fields or []),
+    ]))
+    projected = SimpleNamespace(
+        field_metadata=metadata,
+        question_count=session.question_count + 1,
+        status=session.status,
+        language=getattr(session, "language", "en"),
+        suggested_relevant_fields=suggested,
+    )
+    return question_target_plan(projected)
 
 
 def required_field_questions(session) -> list[str]:

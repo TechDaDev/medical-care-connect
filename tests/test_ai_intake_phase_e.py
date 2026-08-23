@@ -115,8 +115,11 @@ class PhaseEDatasetTests(SimpleTestCase):
             },
         }
         result = _evaluate_case(case, None)
-        self.assertEqual(result["grounding_assessments"][0]["classification"], "canonical")
-        self.assertEqual(result["grounding_assessments"][0]["evidence_span"], {"start": 6, "end": 11})
+        self.assertEqual(
+            result["grounding_assessments"][0]["classification"],
+            "structured_numeric",
+        )
+        self.assertEqual(result["grounding_assessments"][0]["evidence_span"], {"start": 0, "end": 11})
 
 
 class PhaseEGroundingTests(SimpleTestCase):
@@ -145,7 +148,8 @@ class PhaseEGroundingTests(SimpleTestCase):
         for field, value, evidence in cases:
             with self.subTest(field=field, evidence=evidence):
                 result = grounding_evidence(self.update(field, value), evidence)
-                self.assertEqual(result.classification, "canonical")
+                expected = "structured_numeric" if field == "duration" and value == "2 days" else "canonical"
+                self.assertEqual(result.classification, expected)
                 self.assertIsNotNone(result.evidence_span)
                 self.assertEqual(evidence[result.evidence_span.start:result.evidence_span.end], result.evidence_text)
 
@@ -170,7 +174,8 @@ class PhaseEGroundingTests(SimpleTestCase):
         for field, value, evidence in cases:
             with self.subTest(field=field):
                 result = grounding_evidence(self.update(field, value), evidence)
-                self.assertEqual(result.classification, "canonical")
+                expected = "structured_numeric" if field == "duration" and value == "2 days" else "canonical"
+                self.assertEqual(result.classification, expected)
                 self.assertIsNotNone(result.evidence_span)
 
     def test_vague_negated_family_and_unknown_drug_do_not_overclaim(self):

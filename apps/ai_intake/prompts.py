@@ -17,8 +17,10 @@ from apps.ai_intake.constants import (
     INTAKE_FIELDS,
 )
 from apps.ai_intake.services.history import field_allowlist_payload
+from apps.ai_intake.services.completeness import question_target_plan
 
-PROMPT_VERSION = "mcc-intake-v2"
+PROMPT_VERSION = "mcc-intake-v3"
+SCHEMA_VERSION = "mcc-intake-v2"
 
 SYSTEM_POLICY_PROMPT = """You are the automated intake assistant for Medical Care Connect (MCC).
 
@@ -76,9 +78,10 @@ def _server_intake_context(session, completeness, max_questions_budget: int) -> 
         if (entry or {}).get("status") == "declined"
     }
     missing_blocking = completeness.missing_blocking_fields
+    target_plan = question_target_plan(session)
 
     context = {
-        "schema_version": PROMPT_VERSION,
+        "schema_version": SCHEMA_VERSION,
         "session_id": str(session.id),
         "language": session.language,
         "questions_asked": session.question_count,
@@ -89,6 +92,8 @@ def _server_intake_context(session, completeness, max_questions_budget: int) -> 
         "unknown_fields": sorted(unknown),
         "declined_fields": sorted(declined),
         "missing_blocking_fields": missing_blocking,
+        "allowed_next_fields": target_plan.allowed_next_fields,
+        "preferred_next_field": target_plan.preferred_next_field,
         "allowed_emergency_reason_codes": sorted(
             CONDITIONAL_RELEVANCE_RULES  # placeholder replaced below
         ),
@@ -138,6 +143,7 @@ def _output_contract() -> str:
 Rules for the JSON:
 - conversation_status must be "propose_review" ONLY when every missing_blocking field is genuinely covered by the patient's answers. The backend independently verifies completeness. You never force completion.
 - extracted_updates must reference the exact UUIDs of patient messages that support each value. Never invent a value with no evidence.
+- For free-text and list fields, copy the shortest exact patient wording that expresses the value. In Iraqi Arabic and Kurdish Sorani, do not translate, paraphrase, or normalize that wording. Only structured fields such as duration, severity, and booleans may use a canonical value.
 - Use certainty "explicit" when the patient said it directly, "inferred" when you inferred it carefully, "uncertain" when unclear.
 - patient_facing_message must never contain diagnosis, treatment, or prescription content.
 """

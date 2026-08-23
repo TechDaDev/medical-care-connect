@@ -283,7 +283,7 @@ class ProviderOutputMatrixTests(PhaseAExtendedBase):
         session, result, _ = self._run(response=bad)
         self.assertEqual(result["error_code"], "semantic_validation_failed")
 
-    def test_next_question_for_answered_field_rejected(self):
+    def test_next_question_for_answered_field_uses_backend_fallback(self):
         session = self._start()
         session.field_metadata = {"duration": {
             "value": "3 days", "status": "answered",
@@ -294,7 +294,9 @@ class ProviderOutputMatrixTests(PhaseAExtendedBase):
         bad = _valid_turn(next_field="duration", next_text="How long?")
         with self.provider_responds(bad) as provider:
             session, result = process_intake_answer(session, "synthetic", uuid4())
-        self.assertEqual(result["error_code"], "semantic_validation_failed")
+        self.assertNotIn("error_code", result)
+        self.assertNotEqual(session.current_question, "How long?")
+        self.assertEqual(session.messages.last().structured_data["question_target_fallback"], True)
 
     def test_unsafe_diagnosis_in_patient_message_rejected(self):
         bad = _valid_turn(

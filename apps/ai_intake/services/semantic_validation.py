@@ -4,7 +4,7 @@ Pydantic enforces shape. This module enforces meaning:
 - evidence IDs exist and belong to this session;
 - extracted values are grounded in the cited evidence (hallucination guard);
 - no duplicate fields;
-- no next-question for an already answered field;
+- backend, not provider, selects next-question target;
 - no diagnosis/treatment/prescription words in patient-facing content;
 - no prompt-disclosure patterns;
 - no unsupported emergency reasons (code allowlist);
@@ -14,6 +14,7 @@ Pydantic enforces shape. This module enforces meaning:
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 from apps.ai_intake.constants import INTAKE_FIELDS
 
@@ -55,9 +56,6 @@ EMERGENCY_REASON_CODES = {
     "loss_of_consciousness",
 }
 
-# Fields that are already answered by patient message, keyed in field metadata.
-ANSWERED_STATUS = "answered"
-
 # Minimum token length considered meaningful for grounding.
 _TOKEN_MIN_LEN = 4
 # Include Arabic + Kurdish Unicode ranges plus Latin.
@@ -71,7 +69,7 @@ _GROUNDING_PUNCTUATION = str.maketrans({
 })
 _GROUNDING_CHAR_TRANSLATION = str.maketrans({
     "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
-    "ى": "ي", "ی": "ي", "ئ": "ي",
+    "ى": "ي", "ی": "ي",
     "ک": "ك",
     "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
     "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
@@ -79,6 +77,10 @@ _GROUNDING_CHAR_TRANSLATION = str.maketrans({
     "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
 })
 _ZERO_WIDTH = {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"}
+_BIDI_FORMATTING = {
+    "\u061c", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c",
+    "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069",
+}
 _NEGATION_TOKENS = {
     "لا", "ما", "ماكو", "مو", "ليس", "لست", "بدون",
     "نا", "نە", "نیە", "نییه", "نییە", "بێ", "بەبێ",
@@ -101,10 +103,18 @@ _NEGATED_CANONICAL_VALUES = {
 # ownership or accepting unrelated facts.
 GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     "chief_complaint": {
-        "headache": ("صداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرێشەم", "سەرێشەکەم", "سەرم دەئێشێ"),
+        "headache": ("my head aches", "صداع", "أشعر بصداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرێشەم", "سەرێشەکەم", "سەرم دەئێشێ"),
         "head pain": ("راسي يوجعني", "وجع الراس", "سەرم دەئێشێ", "سەرێشەم"),
-        "abdominal pain": ("بطني يوجعني", "وجع البطن", "سکم دەئێشێ", "ئازاری سک"),
-        "back pain": ("ظهري يوجعني", "وجع الظهر", "پشتم دەئێشێ", "ئازاری پشت"),
+        "abdominal pain": ("my stomach hurts", "بطني يوجعني", "بطني يؤلمني", "بطني دا يوجعني", "وجع البطن", "سکم دەئێشێ", "ئازاری سک"),
+        "back pain": ("my back aches", "ظهري يوجعني", "ظهري يؤلمني", "وجع الظهر", "پشتم دەئێشێ", "ئازاری پشت"),
+        "throat pain": ("my throat hurts", "حلقي يعورني", "گەرووم دەئێشێ"),
+        "ألم في الحلق": ("حلقي يعورني", "گەرووم دەئێشێ"),
+        "الم في الحلق": ("حلقي يعورني", "گەرووم دەئێشێ"),
+        "گەروو ئێش": ("گەرووم دەئێشێ",),
+        "گەروو ئێشە": ("گەرووم دەئێشێ",),
+        "ئازاری گەروو": ("گەرووم دەئێشێ",),
+        "سک ئێشە": ("سکم دەئێشێ",),
+        "سک دەئێشێ": ("سکم دەئێشێ",),
         "صداع": ("راسي يوجعني", "وجع الراس"),
         "ألم في الظهر": ("بظهري", "ظهري يوجعني"),
         "الم في الظهر": ("بظهري", "ظهري يوجعني"),
@@ -118,15 +128,22 @@ GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "ئازاری سک": ("لە سکمە", "سکم دەئێشێ"),
         "ناڕەحەتی سک": ("لە سکمە", "سکم دەئێشێ"),
         "dizziness": ("دوخة", "دايخ", "سەرگێژ", "سەرگێژم"),
-        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون"),
+        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون", "دڵتێکچوونم"),
+        "vomiting": ("تقيؤ", "استفراغ", "ارجع", "دا ارجع", "ڕشانەوە"),
+        "cough": ("سعال", "كحة", "کۆکە"),
+        "fatigue": ("تعب", "تعبان", "حيل تعبان", "ماندووم"),
     },
     "symptoms": {
-        "headache": ("صداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرێشەم", "سەرێشەکەم", "سەرم دەئێشێ"),
+        "headache": ("my head aches", "صداع", "أشعر بصداع", "راسي يوجعني", "رأسي يؤلمني", "سەرێشە", "سەرێشەم", "سەرێشەکەم", "سەرم دەئێشێ"),
         "dizziness": ("دوخة", "دايخ", "سەرگێژ", "سەرگێژم"),
-        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون"),
+        "nausea": ("غثيان", "لوعه", "لوعە", "دڵتێکچوون", "دڵتێکچوونم"),
+        "vomiting": ("تقيؤ", "استفراغ", "ارجع", "دا ارجع", "ڕشانەوە"),
+        "cough": ("سعال", "كحة", "کۆکە"),
+        "fatigue": ("تعب", "تعبان", "حيل تعبان", "ماندووم"),
         "head pain": ("راسي يوجعني", "وجع الراس", "سەرم دەئێشێ", "سەرێشەم"),
-        "abdominal pain": ("بطني يوجعني", "وجع البطن", "سکم دەئێشێ", "ئازاری سک"),
-        "back pain": ("ظهري يوجعني", "وجع الظهر", "پشتم دەئێشێ", "ئازاری پشت"),
+        "abdominal pain": ("my stomach hurts", "بطني يوجعني", "بطني يؤلمني", "بطني دا يوجعني", "وجع البطن", "سکم دەئێشێ", "ئازاری سک"),
+        "back pain": ("my back aches", "ظهري يوجعني", "ظهري يؤلمني", "وجع الظهر", "پشتم دەئێشێ", "ئازاری پشت"),
+        "throat pain": ("my throat hurts", "حلقي يعورني", "گەرووم دەئێشێ"),
         "صداع": ("راسي يوجعني", "وجع الراس"),
         "ألم في البطن": ("الوجع ببطني", "الألم ببطني", "بطني يوجعني"),
         "الم في البطن": ("الوجع ببطني", "الألم ببطني", "بطني يوجعني"),
@@ -145,6 +162,17 @@ GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "five days": ("خمس ايام", "خمس أيام", "صارلي خمس ايام", "پێنج ڕۆژ", "پێنج ڕۆژە"),
         "5 days": ("خمس ايام", "خمس أيام", "صارلي خمس ايام", "پێنج ڕۆژ", "پێنج ڕۆژە"),
         "5 أيام": ("خمس ايام", "خمس أيام", "صارلي خمس ايام"),
+        "three days": ("ثلاث ايام", "ثلاثة أيام", "صارلي ثلاث أيام", "سێ ڕۆژ", "سێ ڕۆژە"),
+        "3 days": ("ثلاث ايام", "ثلاثة أيام", "لمدة ثلاثة أيام", "صارلي ثلاث أيام", "سێ ڕۆژ", "سێ ڕۆژە", "for ثلاث أيام"),
+        "3 أيام": ("ثلاث ايام", "ثلاثة أيام", "لمدة ثلاثة أيام", "صارلي ثلاث أيام"),
+        "3 ڕۆژ": ("سێ ڕۆژ", "سێ ڕۆژە"),
+        "سێ ڕۆژ": ("سێ ڕۆژە",),
+        "two weeks": ("اسبوعين", "أسبوعين", "دوو هەفتە", "دوو هەفتەیە"),
+        "2 weeks": ("اسبوعين", "أسبوعين", "لمدة أسبوعين", "صارلي أسبوعين", "دوو هەفتە", "دوو هەفتەیە", "دوو weeks"),
+        "1 month": ("one month", "لمدة شهر", "منذ شهر", "صارلي شهر", "مانگێک", "مانگێکە", "صارلي one month"),
+        "شهر": ("لمدة شهر", "منذ شهر", "صارلي شهر"),
+        "مانگێک": ("مانگێکە",),
+        "دوو هەفتە": ("دوو هەفتەیە",),
         "يومان": ("صارلي يومين", "يومين"),
         "منذ يومين": ("صارلي يومين", "من يومين"),
         "دوو ڕۆژ": ("دوو ڕۆژە", "دوو روژه"),
@@ -177,6 +205,7 @@ GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "back": ("الظهر", "ظهري", "بظهري", "پشت", "پشتم"),
         "leg": ("الرجل", "رجلي", "برجلي", "لاق", "لاقم"),
         "hand": ("اليد", "ايدي", "بيدي", "دەست", "دەستم"),
+        "throat": ("الحلق", "حلقي", "بحلقي", "گەروو", "گەرووم"),
         "الراس": ("راسي", "براسي"),
         "الرأس": ("راسي", "براسي"),
         "الظهر": ("ظهري", "بظهري"),
@@ -189,12 +218,13 @@ GROUNDING_CANONICAL_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "allergies": {
         "penicillin": ("بنسلين", "البنسلين", "پنسلین", "پنسلینم"),
-        "none": ("ما عندي حساسية", "ماكو حساسية", "مو عندي حساسية", "هەستیاریم نییە"),
+        "none": ("no allergies", "ليس لدي حساسية", "ما عندي حساسية", "ماكو عندي حساسية", "ماكو حساسية", "مو عندي حساسية", "هەستیاریم نییە"),
         "none reported": ("ما عندي حساسية", "ماكو حساسية", "مو عندي حساسية", "هەستیاریم نییە"),
         "no known allergies": ("ما عندي حساسية", "ماكو حساسية", "مو عندي حساسية", "هەستیاریم نییە", "هەستیاریی دەرمانم نییە"),
         "بنسلين": ("البنسلين", "حساسية من البنسلين"),
         "لا يوجد": ("ما عندي حساسية", "ماكو حساسية", "مو عندي حساسية"),
         "پنسلین": ("پنسلینم", "هەستیاریی پنسلینم"),
+        "پەنسلین": ("هەستیاریی پنسلینم",),
     },
     "previous_episodes": {
         "yes": ("صارلي نفس الوجع", "تكرر هذا الالم", "هەمان ئازارم هەبوو", "ئەم ئازارە دووبارە بووەوە"),
@@ -229,6 +259,7 @@ class GroundingEvidence:
     classification: str
     evidence_span: EvidenceSpan | None = None
     evidence_text: str | None = None
+    evidence_spans: tuple[EvidenceSpan, ...] = ()
 
 
 def _is_prohibited(text: str) -> bool:
@@ -260,8 +291,12 @@ def _normalized_tokens_with_spans(text) -> list[tuple[str, int, int]]:
     origins: list[int] = []
     for original_index, source_char in enumerate(original):
         for char in unicodedata.normalize("NFKC", source_char).casefold():
-            if char == "ـ" or char in _ZERO_WIDTH or _ARABIC_DIACRITICS.fullmatch(char):
+            if char in _BIDI_FORMATTING:
                 continue
+            if char == "ـ" or _ARABIC_DIACRITICS.fullmatch(char):
+                continue
+            if char in _ZERO_WIDTH:
+                char = " "
             char = char.translate(_GROUNDING_CHAR_TRANSLATION)
             if not (char.isalnum() or unicodedata.category(char).startswith("L")):
                 char = " "
@@ -277,32 +312,122 @@ def _normalized_tokens_with_spans(text) -> list[tuple[str, int, int]]:
     return tokens
 
 
-def _phrase_span(evidence_text: str, phrase: str) -> EvidenceSpan | None:
+def _phrase_spans(evidence_text: str, phrase: str) -> list[EvidenceSpan]:
     evidence_tokens = _normalized_tokens_with_spans(evidence_text)
     phrase_tokens = [token for token, _, _ in _normalized_tokens_with_spans(phrase)]
     if not phrase_tokens:
-        return None
+        return []
     width = len(phrase_tokens)
+    spans = []
     for index in range(len(evidence_tokens) - width + 1):
         if [token for token, _, _ in evidence_tokens[index:index + width]] == phrase_tokens:
-            return EvidenceSpan(evidence_tokens[index][1], evidence_tokens[index + width - 1][2])
-    return None
+            spans.append(EvidenceSpan(
+                evidence_tokens[index][1], evidence_tokens[index + width - 1][2]
+            ))
+    return spans
+
+
+def _phrase_span(evidence_text: str, phrase: str) -> EvidenceSpan | None:
+    spans = _phrase_spans(evidence_text, phrase)
+    return spans[0] if spans else None
+
+
+@lru_cache(maxsize=1)
+def _normalized_safety_tokens() -> tuple[set[str], set[str], set[str], set[str]]:
+    normalize = lambda values: {normalize_grounding_text(value) for value in values}
+    return (
+        normalize(_NEGATION_TOKENS),
+        normalize(_FAMILY_TOKENS),
+        normalize(_HISTORICAL_OR_HYPOTHETICAL_TOKENS),
+        normalize(_NEGATED_CANONICAL_VALUES),
+    )
+
+
+def _clause_before(evidence_text: str, span: EvidenceSpan) -> str:
+    before = str(evidence_text or "")[:span.start]
+    return re.split(r"[،,؛;.!؟?]", before)[-1]
 
 
 def _unsafe_context(evidence_text: str, span: EvidenceSpan, canonical) -> bool:
     preceding = [
         token for token, _, end in _normalized_tokens_with_spans(evidence_text)
-        if end <= span.start
+        if end <= span.start and end > span.start - len(_clause_before(evidence_text, span)) - 1
     ][-4:]
     normalized_canonical = normalize_grounding_text(canonical)
-    if any(token in _FAMILY_TOKENS for token in preceding):
+    negation, family, historical, negated_values = _normalized_safety_tokens()
+    if any(token in family for token in preceding):
         return True
-    if any(token in _HISTORICAL_OR_HYPOTHETICAL_TOKENS for token in preceding):
+    if any(token in historical for token in preceding):
         return True
     return (
-        normalized_canonical not in _NEGATED_CANONICAL_VALUES
-        and any(token in _NEGATION_TOKENS for token in preceding[-3:])
+        normalized_canonical not in negated_values
+        and any(token in negation for token in preceding[-3:])
     )
+
+
+def _field_context_supported(
+    field: str, canonical, evidence_text: str, span: EvidenceSpan
+) -> bool:
+    if field != "allergies":
+        return True
+    if normalize_grounding_text(canonical) in _normalized_safety_tokens()[3]:
+        return True
+    clause = str(evidence_text or "")[
+        max(0, str(evidence_text or "").rfind("،", 0, span.start)):
+    ]
+    normalized = normalize_grounding_text(clause)
+    markers = (
+        "حساسية", "هەستیاری", "هەستیاریی", "allergy", "allergic",
+    )
+    return any(normalize_grounding_text(marker) in normalized for marker in markers)
+
+
+def _is_patient_correction(evidence_text: str, span: EvidenceSpan) -> bool:
+    normalized = normalize_grounding_text(evidence_text)
+    markers = {
+        "قصدي", "تصحيح", "لا", "مو", "نه ك", "نەك", "ڕاستكردنه وه",
+        "ڕاستکردنەوە",
+    }
+    return bool(re.search(r"[،,؛;]", str(evidence_text or ""))) and any(
+        marker in normalized for marker in markers
+    )
+
+
+_DURATION_CANONICAL_NUMBER = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+}
+_DURATION_PATTERNS = (
+    (1, "day", r"(?:صارلي|صارله|من)? ?يوم(?: واحد)?"),
+    (2, "day", r"(?:صارلي|صارله|من)? ?يومين|يومان|دوو ?ڕۆژە?"),
+    (3, "day", r"(?:صارلي|صارله|من)? ?(?:ثلاث|ثلاثه|3) ?ايام|سێ ?ڕۆژ"),
+    (5, "day", r"(?:صارلي|صارله|من)? ?(?:خمس|5) ?ايام|پێنج ?ڕۆژە?"),
+    (1, "week", r"(?:صارلي|صارله|من)? ?اسبوع|يەك ?هەفتەیە?|هەفتەیەك"),
+    (2, "week", r"(?:صارلي|صارله|من)? ?اسبوعين|دوو ?هەفتە"),
+    (1, "month", r"(?:صارلي|صارله|من)? ?شهر|مانگێكە?|يەك ?مانگ"),
+)
+
+
+def _canonical_duration(value) -> tuple[int, str] | None:
+    normalized = normalize_grounding_text(value)
+    match = re.fullmatch(r"(one|two|three|four|five|[1-5]) (day|days|week|weeks|month|months)", normalized)
+    if not match:
+        return None
+    return _DURATION_CANONICAL_NUMBER[match.group(1)], match.group(2).rstrip("s")
+
+
+def _structured_duration_span(value, evidence_text: str) -> EvidenceSpan | None:
+    canonical = _canonical_duration(value)
+    if not canonical:
+        return None
+    normalized_evidence = normalize_grounding_text(evidence_text)
+    for number, unit, pattern in _DURATION_PATTERNS:
+        if (number, unit) != canonical:
+            continue
+        match = re.search(rf"(?:^| )({pattern})(?: |$)", normalized_evidence)
+        if match:
+            return _phrase_span(evidence_text, match.group(1))
+    return None
 
 
 def _canonical_alias_span(field: str, value, evidence_text: str) -> EvidenceSpan | None:
@@ -316,9 +441,14 @@ def _canonical_alias_span(field: str, value, evidence_text: str) -> EvidenceSpan
             if normalized_value != normalized_canonical:
                 continue
             for phrase in phrases:
-                span = _phrase_span(evidence_text, phrase)
-                if span and not _unsafe_context(evidence_text, span, canonical):
-                    item_span = span
+                for span in _phrase_spans(evidence_text, phrase):
+                    if (
+                        not _unsafe_context(evidence_text, span, canonical)
+                        and _field_context_supported(field, canonical, evidence_text, span)
+                    ):
+                        item_span = span
+                        break
+                if item_span:
                     break
             if item_span:
                 break
@@ -336,23 +466,47 @@ def grounding_evidence(update, evidence_text: str) -> GroundingEvidence:
     values = update.value if isinstance(update.value, list) else [update.value]
     values = [value for value in values if value is not None and str(value).strip()]
     if not values:
-        return GroundingEvidence("structured")
-    spans = [_phrase_span(evidence_text, str(value)) for value in values]
-    spans = [
-        span if span and not _unsafe_context(evidence_text, span, value) else None
-        for value, span in zip(values, spans, strict=True)
-    ]
+        return GroundingEvidence("unsupported")
+    spans = []
+    for value in values:
+        span = next((
+            candidate for candidate in _phrase_spans(evidence_text, str(value))
+            if not _unsafe_context(evidence_text, candidate, value)
+            and _field_context_supported(update.field, value, evidence_text, candidate)
+        ), None)
+        spans.append(span)
     if all(spans):
         span = spans[0]
         raw = str(evidence_text or "")
         classification = "literal" if all(
             str(value).casefold() in raw.casefold() for value in values
         ) else "normalized"
-        return GroundingEvidence(classification, span, raw[span.start:span.end])
+        if _is_patient_correction(evidence_text, span):
+            classification = "patient_correction"
+        return GroundingEvidence(
+            classification, span, raw[span.start:span.end], tuple(spans)
+        )
+    if update.field == "duration" and len(values) == 1:
+        span = _structured_duration_span(values[0], evidence_text)
+        if span and not _unsafe_context(evidence_text, span, values[0]):
+            raw = str(evidence_text or "")
+            classification = (
+                "patient_correction"
+                if _is_patient_correction(evidence_text, span)
+                else "structured_numeric"
+            )
+            return GroundingEvidence(
+                classification, span, raw[span.start:span.end], (span,)
+            )
     span = _canonical_alias_span(update.field, update.value, evidence_text)
     if span:
         raw = str(evidence_text or "")
-        return GroundingEvidence("canonical", span, raw[span.start:span.end])
+        classification = (
+            "patient_correction"
+            if _is_patient_correction(evidence_text, span)
+            else "canonical"
+        )
+        return GroundingEvidence(classification, span, raw[span.start:span.end], (span,))
     return GroundingEvidence("unsupported")
 
 
@@ -421,16 +575,6 @@ def validate_semantics(session, response) -> None:
         if not _value_type_matches(field_spec.get("type"), update.value):
             raise SemanticValidationError(
                 f"Extracted field {update.field!r} has an invalid value type"
-            )
-
-    # No next question for an already-answered field.
-    metadata = session.field_metadata or {}
-    if response.next_question and response.next_question.field:
-        field = response.next_question.field
-        entry = metadata.get(field) or {}
-        if entry.get("status") == ANSWERED_STATUS:
-            raise SemanticValidationError(
-                f"Next question targets already-answered field {field!r}"
             )
 
     # Emergency reasons must be safe codes.

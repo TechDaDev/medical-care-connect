@@ -148,7 +148,7 @@ class EvaluationHarnessTests(SimpleTestCase):
         self.assertEqual(report["metrics"]["emergency_downgrade_rejection_rate"], 1.0)
         self.assertEqual(report["metrics"]["hallucinated_field_rejection_rate"], 1.0)
         self.assertEqual(report["metrics"]["provider_failure_handling_rate"], 1.0)
-        self.assertEqual(report["metrics"]["duplicate_question_avoidance_rate"], 0.5)
+        self.assertEqual(report["metrics"]["duplicate_question_avoidance_rate"], 1.0)
         body = json.dumps(report)
         self.assertNotIn("API key", body)
         self.assertNotIn("base_url", body)
